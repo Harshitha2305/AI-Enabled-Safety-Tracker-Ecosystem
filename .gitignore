@@ -1,0 +1,38 @@
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+env/
+
+# Secrets and environment files
+.env
+.env.*
+!.env.example
+
+# Local database
+db.sqlite3
+db.sqlite3-journal
+
+# Uploaded user files — may contain personal information
+identity_documents/
+profile_photos/
+volunteer_documents/
+media/
+
+# Frontend dependencies and build output
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Generated Django files
+staticfiles/
+
+# Logs
+*.log
+
+# Editor files
+.vscode/
+.idea/

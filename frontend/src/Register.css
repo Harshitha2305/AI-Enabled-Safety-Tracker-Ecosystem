@@ -1,0 +1,360 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap');
+
+.register-page {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 0.9fr 1.1fr;
+  align-items: stretch;
+  background: #fff;
+  color: #172238;
+  font-family: "DM Sans", sans-serif;
+}
+
+.register-page * {
+  box-sizing: border-box;
+}
+
+/* LEFT BRANDING PANEL */
+.register-visual {
+  display: flex;
+  flex-direction: column;
+  padding: 42px clamp(25px, 5vw, 70px);
+  color: #fff;
+  background:
+    radial-gradient(ellipse at 80% 70%, #164a78 0%, transparent 48%),
+    linear-gradient(145deg, #101c32, #0b1426 65%, #102d48);
+}
+
+.register-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+  font-family: "Manrope", sans-serif;
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: 1.5px;
+}
+
+.register-brand-icon {
+  display: grid;
+  place-items: center;
+  width: 39px;
+  height: 39px;
+  flex-shrink: 0;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #438dff, #1bc6bd);
+  font-size: 27px;
+}
+
+.register-brand-dot {
+  color: #45d4cc;
+}
+
+.register-visual-content {
+  width: 100%;
+  max-width: 460px;
+  margin: 50px 0 0;
+  padding: 0;
+}
+
+.register-eyebrow,
+.register-kicker {
+  color: #2879cb;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.7px;
+}
+
+.register-eyebrow {
+  color: #65d5d0;
+}
+
+.register-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.register-eyebrow::before {
+  content: "";
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: #45d4cc;
+}
+.register-visual-content h1 {
+  margin: 24px 0 18px;
+  font: 800 clamp(34px, 4vw, 49px)/1.2 "Manrope", sans-serif;
+  letter-spacing: -1.5px;
+}
+
+.register-visual-content h1 span {
+  color: #65d5d0;
+}
+
+.register-visual-content > p {
+  color: #a7b6ca;
+  font-size: 14px;
+  line-height: 1.9;
+}
+
+.register-feature {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-top: 30px;
+}
+
+.register-feature > span {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  color: #70e3d0;
+  background: #173a4d;
+}
+
+.register-feature strong {
+  font-size: 13px;
+}
+
+.register-feature p {
+  margin: 5px 0 0;
+  color: #a7b6ca;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* RIGHT REGISTRATION PANEL */
+.register-form-side {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  min-width: 0;
+  min-height: 100vh;
+  padding: 40px clamp(24px, 4vw, 60px) 48px;
+  background: #fff;
+}
+
+.register-form-wrap {
+  width: 100%;
+  max-width: 510px;
+  min-width: 0;
+  margin: 0 auto;
+}
+
+.register-kicker {
+  margin: 0 0 10px;
+}
+
+.register-form-wrap h2 {
+  margin: 0;
+  font: 800 30px/1.25 "Manrope", sans-serif;
+  letter-spacing: -0.9px;
+}
+
+.register-subtitle {
+  margin: 10px 0 24px;
+  color: #8290a3;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.register-form-wrap form {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  gap: 0;
+}
+
+.register-form-wrap label {
+  display: block;
+  margin: 13px 0 7px;
+  color: #34445b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.register-form-wrap input,
+.register-form-wrap select,
+.register-form-wrap textarea {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid #dfe6ef;
+  border-radius: 9px;
+  outline: none;
+  background: #fbfcfe;
+  color: #1b2940;
+  font: 13px "DM Sans", sans-serif;
+}
+
+.register-form-wrap input[type="file"] {
+  height: auto;
+  min-height: 50px;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.register-form-wrap input[type="file"]::file-selector-button {
+  margin-right: 8px;
+  cursor: pointer;
+}
+
+.register-form-wrap textarea {
+  min-height: 84px;
+  resize: vertical;
+}
+
+.register-form-wrap input:focus,
+.register-form-wrap select:focus,
+.register-form-wrap textarea:focus {
+  border-color: #438dff;
+  box-shadow: 0 0 0 3px rgba(67, 141, 255, 0.12);
+}
+
+.register-password-wrap {
+  position: relative;
+  width: 100%;
+}
+
+.register-password-wrap input {
+  padding-right: 60px;
+}
+
+.register-password-wrap button {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
+  border: 0;
+  background: transparent;
+  color: #2879cb;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.register-info,
+.register-error,
+.register-success {
+  margin: 14px 0 0;
+  padding: 11px 12px;
+  border-radius: 9px;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-line;
+}
+
+.register-info {
+  border: 1px solid #d6e8ff;
+  background: #f1f7ff;
+  color: #285b91;
+}
+
+.register-error {
+  border: 1px solid #fecaca;
+  background: #fff1f2;
+  color: #b42332;
+}
+
+.register-success {
+  border: 1px solid #b9ead5;
+  background: #effcf5;
+  color: #14754b;
+}
+
+.register-submit {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  min-height: 49px;
+  margin-top: 22px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 10px;
+  background: linear-gradient(100deg, #2368ca, #3289e8);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.register-submit:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.register-submit span {
+  font-size: 20px;
+}
+
+.register-login-prompt {
+  margin-top: 23px;
+  color: #8793a4;
+  font-size: 12px;
+  text-align: center;
+}
+
+.register-login-prompt button {
+  margin-left: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #2879cb;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* TABLETS AND MOBILE */
+@media (max-width: 850px) {
+  .register-page {
+    grid-template-columns: 1fr;
+  }
+
+  .register-visual {
+    display: none;
+  }
+
+  .register-form-side {
+    justify-content: center;
+    align-items: flex-start;
+    min-height: 100vh;
+    padding: 32px 22px 40px;
+    background:
+      radial-gradient(ellipse at 90% 0%, #edf6ff 0%, transparent 42%),
+      #fff;
+  }
+
+  .register-form-wrap {
+    max-width: 520px;
+    margin: 0 auto;
+  }
+}
+
+@media (max-width: 480px) {
+  .register-form-side {
+    padding: 25px 17px 35px;
+  }
+
+  .register-form-wrap h2 {
+    font-size: 26px;
+  }
+
+  .register-subtitle {
+    margin-bottom: 18px;
+  }
+
+  .register-form-wrap label {
+    margin-top: 12px;
+  }
+}
