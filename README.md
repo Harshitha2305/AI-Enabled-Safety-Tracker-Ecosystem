@@ -1,6 +1,6 @@
 # 🛡️ SAFEGUARD — AI-Enabled Safety Tracker Ecosystem
 
-**A smart safety monitoring platform designed to connect individuals and families through real-time safety monitoring, SOS alerts, and emergency notifications.**
+**A smart safety monitoring platform designed to connect individuals and families through real-time safety monitoring, SOS alerts, and emergency notifications.**  
 
 ## 📌 Overview
 
