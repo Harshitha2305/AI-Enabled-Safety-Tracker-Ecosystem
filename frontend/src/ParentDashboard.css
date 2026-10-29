@@ -816,19 +816,23 @@
 
 @media (max-width: 700px) {
   .parent-app {
-    flex-direction: column;
+    display: block;
   }
 
+  /* Match the user dashboard: sticky horizontal navigation on narrow screens */
   .parent-sidebar {
-    position: relative;
-    top: auto;
+    position: sticky;
+    top: 0;
     left: auto;
+    right: auto;
     bottom: auto;
     width: 100%;
     height: auto;
-    min-height: auto;
-    padding: 13px;
+    min-height: 0;
+    padding: 9px 10px;
     overflow: visible;
+    z-index: 1000;
+    box-shadow: 0 4px 14px rgba(9, 27, 48, 0.12);
   }
 
   .parent-workspace {
@@ -968,5 +972,394 @@
 
   .parent-stat-card {
     min-height: 90px;
+  }
+}
+
+/* Parent safety overview additions. Existing logout styles above are intentionally unchanged. */
+.parent-safety-section {
+  margin: 0 0 18px;
+  padding: 22px;
+  border: 1px solid #e8eef5;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 5px 20px #1d365508;
+  scroll-margin-top: 20px;
+}
+.parent-safety-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+.parent-safety-heading h2 {
+  margin: 7px 0 6px;
+  font-size: 20px;
+  letter-spacing: -0.4px;
+}
+.parent-safety-heading p {
+  margin: 0;
+  color: var(--parent-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.parent-safety-badge {
+  flex-shrink: 0;
+  padding: 8px 11px;
+  border-radius: 20px;
+  font-size: 10px;
+  font-weight: 800;
+}
+.parent-safety-badge.safe {
+  background: #e5f8ef;
+  color: #19784f;
+}
+.parent-safety-badge.danger {
+  background: #ffe8e9;
+  color: #c63240;
+}
+.parent-safety-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.parent-safety-card {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 15px;
+  border: 1px solid #e5edf7;
+  border-radius: 12px;
+  background: #f9fbff;
+}
+.parent-safety-card-icon {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  font-size: 21px;
+  font-weight: 800;
+}
+.parent-safety-card-icon.red { background: #ffebed; color: #dc4451; }
+.parent-safety-card-icon.blue { background: #e3f1ff; color: #147ce1; }
+.parent-safety-card-icon.violet { background: #eeeaff; color: #7058d8; }
+.parent-safety-card-icon.teal { background: #dcf8f0; color: #079e82; }
+.parent-safety-card > div:last-child { min-width: 0; }
+.parent-safety-card span {
+  display: block;
+  color: #526982;
+  font-size: 12px;
+  font-weight: 700;
+}
+.parent-safety-card strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 15px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.parent-safety-card small {
+  display: block;
+  margin-top: 6px;
+  color: var(--parent-muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.parent-safety-card .parent-map-link { margin-top: 8px; }
+.parent-safety-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 13px 15px;
+  border: 1px solid #ffe5cb;
+  border-radius: 10px;
+  background: #fff7ed;
+  color: #99421a;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.parent-safety-note a { color: #b93816; font-weight: 800; }
+.parent-child-emergency-contact {
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+.parent-child-emergency-contact strong {
+  font-size: 12px;
+  color: #334155;
+}
+.parent-child-emergency-contact p {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: #475569;
+}
+.parent-child-emergency-contact a { color: #0878df; font-weight: 700; }
+@media (max-width: 700px) {
+  .parent-safety-section { padding: 17px; }
+  .parent-safety-heading { flex-direction: column; }
+  .parent-safety-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Parent dashboard safety features: additive styles only. Existing logout rules are untouched. */
+.parent-monitor-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 18px;
+  margin: 0 0 18px;
+  scroll-margin-top: 20px;
+}
+.parent-sos-panel { background: linear-gradient(145deg, #fff, #fff8f9); border-color: #ffd9df; }
+.parent-sos-button {
+  width: 100%; min-height: 54px; padding: 14px 18px; border: 0; border-radius: 11px;
+  background: linear-gradient(100deg, #ff3154, #e9153e); color: #fff; font: inherit;
+  font-weight: 800; letter-spacing: .2px; cursor: pointer; box-shadow: 0 8px 18px #f5234724;
+}
+.parent-sos-button:hover { filter: brightness(1.04); }
+.parent-sos-button:disabled { opacity: .65; cursor: wait; }
+.parent-sos-button.cancel { background: #fff0f2; color: #d21f40; border: 1px solid #ffcbd4; box-shadow: none; }
+.parent-sos-status { margin: 13px 0 8px; padding: 11px 13px; border-radius: 9px; background: #fbecef; color: #8d5360; font-size: 12px; }
+.parent-sos-feedback { margin: 8px 0; color: #087d68; font-size: 12px; overflow-wrap: anywhere; }
+.parent-sos-panel > small, .parent-muted-note { display: block; margin-top: 12px; color: #7a8da7; font-size: 11px; line-height: 1.65; }
+.parent-sensor-banner { display: flex; flex-direction: column; gap: 7px; padding: 14px; border: 1px solid #bdeedc; border-radius: 11px; background: #effbf6; color: #078367; }
+.parent-sensor-banner.danger { border-color: #ffcbd2; background: #fff0f2; color: #c62843; }
+.parent-sensor-banner span { font-size: 12px; }
+.parent-sensor-values { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 13px; }
+.parent-sensor-values > div { min-width: 0; padding: 12px; border: 1px solid #e0eafa; border-radius: 10px; background: #f7faff; }
+.parent-sensor-values span { display: block; margin-bottom: 7px; color: #7488a4; font-size: 11px; }
+.parent-sensor-values strong { display: block; overflow-wrap: anywhere; color: #142b49; font-size: 15px; }
+#parent-history { scroll-margin-top: 20px; }
+@media (max-width: 900px) { .parent-monitor-grid { grid-template-columns: minmax(0, 1fr); } .parent-sensor-values { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+
+/* ===== Alert acknowledgement button (matches existing JSX class) ===== */
+.parent-acknowledge-area {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 13px;
+}
+
+.parent-acknowledge-button {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  padding: 11px 17px;
+  border: 1px solid #1763d1;
+  border-radius: 10px;
+  color: #fff;
+  background: linear-gradient(135deg, #2879ed, #175bd0);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.18);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.25;
+  cursor: pointer;
+  transition: transform .18s ease, box-shadow .18s ease, background .18s ease;
+}
+
+.parent-acknowledge-button:hover:not(:disabled) {
+  background: linear-gradient(135deg, #1768df, #124db8);
+  box-shadow: 0 7px 16px rgba(37, 99, 235, 0.23);
+  transform: translateY(-1px);
+}
+
+.parent-acknowledge-button:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, 0.28);
+  outline-offset: 3px;
+}
+
+.parent-acknowledge-button:disabled {
+  opacity: .65;
+  cursor: wait;
+  transform: none;
+}
+
+.parent-acknowledged {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 10px 13px;
+  border: 1px solid #bde9d5;
+  border-radius: 10px;
+  color: #176b4c;
+  background: #ecfbf3;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* Keep alert cards tidy as their text and map links vary */
+.parent-alert-row {
+  border-radius: 12px;
+  transition: background .18s ease;
+}
+
+.parent-alert-body {
+  overflow-wrap: anywhere;
+}
+
+.parent-alert-body time {
+  display: block;
+  margin-top: 9px;
+  color: #8292a8;
+  font-size: 11px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .parent-acknowledge-button {
+    transition: none;
+  }
+}
+/* Family and response locations */
+.parent-related-locations-panel {
+  margin: 0 0 18px;
+  scroll-margin-top: 20px;
+}
+
+.parent-related-location-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.parent-related-location-card {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid #e2eaf5;
+  border-radius: 12px;
+  background: #f8faff;
+}
+
+.parent-related-location-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.parent-related-location-top strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #1b3150;
+  font-size: 13px;
+}
+
+.parent-related-location-top span {
+  max-width: 48%;
+  padding: 4px 6px;
+  border-radius: 7px;
+  background: #e8f3ff;
+  color: #226bc0;
+  font-size: 9px;
+  font-weight: 700;
+  text-align: center;
+  text-transform: capitalize;
+}
+
+.parent-related-location-card p {
+  margin: 8px 0;
+  color: #8292a9;
+  font-size: 10px;
+  text-transform: capitalize;
+}
+
+.parent-related-coordinates {
+  display: block;
+  overflow-wrap: anywhere;
+  color: #203956;
+  font-size: 12px;
+}
+
+.parent-related-location-card a {
+  display: inline-block;
+  margin-top: 10px;
+  color: #1769d2;
+  font-size: 11px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.parent-related-location-card a:hover {
+  text-decoration: underline;
+}
+
+.parent-related-location-card small {
+  display: block;
+  margin-top: 8px;
+  color: #8796ac;
+  font-size: 9px;
+}
+
+/* Simulated SMS preview */
+.parent-sms-preview {
+  margin-top: 13px;
+  padding: 12px;
+  border: 1px solid #f4dfb8;
+  border-radius: 10px;
+  background: #fffaf0;
+}
+
+.parent-sms-preview > strong {
+  display: block;
+  color: #76531a;
+  font-size: 12px;
+}
+
+.parent-sms-preview p {
+  margin: 5px 0 8px;
+  color: #98712b;
+  font-size: 10px;
+}
+
+.parent-sms-preview ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.parent-sms-preview li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 8px;
+  padding-top: 8px;
+  border-top: 1px solid #f2e6cf;
+}
+
+.parent-sms-preview li span {
+  color: #253b57;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.parent-sms-preview li strong {
+  color: #253b57;
+  font-size: 10px;
+}
+
+.parent-sms-preview li small {
+  grid-column: 1 / -1;
+  color: #a16b17;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+@media (max-width: 1100px) {
+  .parent-related-location-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 700px) {
+  .parent-related-location-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

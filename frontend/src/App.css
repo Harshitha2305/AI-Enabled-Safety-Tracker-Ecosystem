@@ -200,3 +200,206 @@
     text-align: center;
   }
 }
+
+/* SAFEGUARD: let the Live Location card use the full row in primary-grid. */
+.primary-grid > .location-panel {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-width: 0;
+}
+/* Parent SOS notices on the child dashboard */
+.child-parent-sos-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 0 0 14px;
+  padding: 15px;
+  border: 1px solid #ffcbd1;
+  border-radius: 13px;
+  background: linear-gradient(120deg, #fff7f7, #fff);
+}
+
+.child-parent-sos-notice-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: #ffe5e8;
+  color: #d92c47;
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.child-parent-sos-notice-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.child-parent-sos-notice-content > strong {
+  display: block;
+  color: #a91f37;
+  font-size: 13px;
+}
+
+.child-parent-sos-notice-content p {
+  margin: 5px 0;
+  color: #435775;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.child-parent-sos-notice-content small,
+.child-parent-sos-notice-content time {
+  display: block;
+  color: #8795aa;
+  font-size: 10px;
+}
+
+.child-parent-sos-notice-content a {
+  display: inline-block;
+  margin-top: 7px;
+  color: #1769d2;
+  font-size: 11px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.child-parent-sos-notice-content a:hover {
+  text-decoration: underline;
+}
+
+.child-parent-sos-notice > button {
+  flex: 0 0 auto;
+  padding: 8px 11px;
+  border: 1px solid #f2c0c8;
+  border-radius: 9px;
+  background: #fff;
+  color: #a91f37;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.child-parent-sos-notice > button:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
+/* Related locations inside the Live Location card */
+.related-location-section {
+  margin-top: 20px;
+  padding-top: 17px;
+  border-top: 1px solid #e9eef6;
+}
+
+.related-location-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.related-location-heading strong {
+  color: #203956;
+  font-size: 12px;
+}
+
+.related-location-heading span {
+  color: #8797ad;
+  font-size: 9px;
+}
+
+.related-location-empty {
+  margin: 0;
+  padding: 12px;
+  border-radius: 10px;
+  background: #f7faff;
+  color: #7b8da6;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.related-location-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 11px;
+}
+
+.related-location-card {
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid #e2eaf5;
+  border-radius: 12px;
+  background: #f8faff;
+}
+
+.related-location-card > div {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.related-location-card > div strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #1e3655;
+  font-size: 12px;
+}
+
+.related-location-card > div span {
+  flex: 0 0 auto;
+  color: #607998;
+  font-size: 9px;
+}
+
+.related-location-card > small {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  color: #7a5a15;
+  background: #fff4d9;
+  font-size: 8px;
+  font-weight: 800;
+}
+
+.related-location-card p {
+  margin: 8px 0;
+  color: #425875;
+  font-size: 11px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.related-location-card a {
+  color: #1769d2;
+  font-size: 10px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.related-location-card time {
+  display: block;
+  margin-top: 7px;
+  color: #8a9ab0;
+  font-size: 9px;
+}
+
+@media (max-width: 620px) {
+  .child-parent-sos-notice {
+    flex-wrap: wrap;
+  }
+
+  .child-parent-sos-notice > button {
+    margin-left: 44px;
+  }
+
+  .related-location-grid {
+    grid-template-columns: 1fr;
+  }
+}

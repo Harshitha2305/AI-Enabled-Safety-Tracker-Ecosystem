@@ -67,3 +67,20 @@ class EmergencyNotification(models.Model):
 
     def __str__(self):
         return f"Notification for {self.recipient.username}: Emergency #{self.emergency_id}"
+
+class UserLocation(models.Model):
+    """Latest location for a logged-in SAFEGUARD account."""
+
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name="safeguard_location",
+    )
+    latitude = models.FloatField()
+    longitude = models.FloatField()
+    accuracy_m = models.FloatField(null=True, blank=True)
+    is_simulated = models.BooleanField(default=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Location for {self.user.username}"

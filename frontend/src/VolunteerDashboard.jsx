@@ -1,881 +1,726 @@
+
 import { useCallback, useEffect, useState } from "react";
 import "./VolunteerDashboard.css";
-import Profile from "./Profile.jsx";
 
-function VolunteerDashboard({ currentUser, onLogout }) {
+const THRESHOLD = 18;
+const REFRESH_MS = 5000;
+
+export default function VolunteerDashboard({ currentUser, onLogout }) {
+  const [tab, setTab] = useState("dashboard");
   const [emergencies, setEmergencies] = useState([]);
+  const [assigned, setAssigned] = useState([]);
+  const [assignedLiveLocations, setAssignedLiveLocations] = useState({});
+  const [relatedLocations, setRelatedLocations] = useState([]);
+  const [sensorData, setSensorData] = useState(null);
+  const [sensorLoading, setSensorLoading] = useState(true);
+  const [sensorError, setSensorError] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
-  const [acceptingId, setAcceptingId] = useState(null);
-  const [rejectingId, setRejectingId] = useState(null);
+  const [notice, setNotice] = useState("");
+  const [busyId, setBusyId] = useState(null);
+  const [volunteerSOS, setVolunteerSOS] = useState(null);
+  const [smsPreview, setSmsPreview] = useState(null);
+  const [sosBusy, setSosBusy] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(null);
-  const [activeTab, setActiveTab] = useState("dashboard");
-  const [assignedEmergencies, setAssignedEmergencies] = useState([]);
-  const [showProfile, setShowProfile] = useState(false);
+
+  const request = async (url, options = {}) => {
+    const authToken = localStorage.getItem("authToken");
+    if (!authToken) throw new Error("Session expired. Please log in again.");
+
+    const response = await fetch(url, {
+  cache: "no-store",
+      ...options,
+      headers: {
+        Authorization: `Token ${authToken}`,
+        ...(options.body ? { "Content-Type": "application/json" } : {}),
+        ...options.headers,
+      },
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.detail || data.error || data.message || "Request failed.");
+    }
+    return data;
+  };
+
+  const toList = (data) =>
+    Array.isArray(data) ? data : Array.isArray(data?.results) ? data.results : [];
+
   
-const [volunteerSOSId, setVolunteerSOSId] = useState(null);
-const [volunteerSOSLoading, setVolunteerSOSLoading] = useState(false);
-const [volunteerSOSMessage, setVolunteerSOSMessage] = useState("");
-const [volunteerSOSStatus, setVolunteerSOSStatus] = useState("");
-const [volunteerSmsSimulation, setVolunteerSmsSimulation] = useState(null);
+const loadEmergencies = useCallback(async () => {
+  try {
+    const [active, mine] = await Promise.all([
+      request("/api/alerts/active/"),
+      request("/api/alerts/mine/"),
+    ]);
 
-  const fetchEmergencies = useCallback(async () => {
-    const token = localStorage.getItem("authToken");
+    const isInactive = (item) =>
+      ["cancelled", "canceled", "resolved", "closed"].includes(
+        String(item.status || "").toLowerCase()
+      );
 
-    if (!token) {
-      setError("Your session has expired. Please log in again.");
-      setLoading(false);
-      return;
+    const activeRows = toList(active).filter(
+      (item) => !isInactive(item)
+    );
+
+    const assignedRows = toList(mine).filter(
+      (item) => !isInactive(item)
+    );
+
+    setEmergencies(activeRows);
+    setAssigned(assignedRows);
+
+    // Load only this volunteer's own location and assigned people.
+    try {
+      const related = await request("/api/alerts/related/locations/");
+
+      setRelatedLocations(
+        toList(related).filter(
+          (item) =>
+            item.relation === "self" ||
+            item.relation === "assigned_person"
+        )
+      );
+    } catch (locationError) {
+      console.error(
+        "Could not load related locations:",
+        locationError.message
+      );
+      setRelatedLocations([]);
     }
 
+    // Fetch live locations only for current assignments.
+    const livePairs = await Promise.all(
+      assignedRows
+        .filter((item) =>
+          ["assigned", "responding"].includes(
+            String(item.status || "").toLowerCase()
+          )
+        )
+        .map(async (item) => {
+          try {
+            const location = await request(
+              `/api/alerts/${item.id}/live-location/`
+            );
+            return [item.id, location];
+          } catch {
+            return [item.id, null];
+          }
+        })
+    );
+
+    setAssignedLiveLocations(
+      Object.fromEntries(
+        livePairs.filter(([, location]) => location)
+      )
+    );
+
+    setError("");
+    setLastUpdated(new Date());
+  } catch (err) {
+    setError(err.message);
+  } finally {
+    setLoading(false);
+  }
+}, []);
+
+  const loadSensors = useCallback(async () => {
+    setSensorLoading(true);
     try {
-      const response = await fetch("/api/alerts/active/", {
-        headers: { Authorization: `Token ${token}` },
+      const response = await fetch("/api/sensor-data/all/", {
+        headers: {
+          Authorization: `Token ${localStorage.getItem("authToken")}`,
+        },
       });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          data.detail || data.error || "Unable to load emergency alerts."
-        );
-      }
-
-      setEmergencies(Array.isArray(data) ? data : data.results || []);
-      setError("");
-      setLastUpdated(new Date());
+      if (!response.ok) throw new Error("Sensor API unavailable.");
+      setSensorData(await response.json());
+      setSensorError("");
     } catch (err) {
-      setError(err.message || "Unable to connect to the emergency service.");
+      setSensorError(err.message);
     } finally {
-      setLoading(false);
+      setSensorLoading(false);
     }
   }, []);
-  
-const fetchVolunteerSOS = useCallback(async () => {
-  const token = localStorage.getItem("authToken");
-  if (!token) return;
 
-  try {
-    const response = await fetch("/api/alerts/volunteer-sos/", {
-      headers: {
-        Authorization: `Token ${token}`,
-      },
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(
-        data.detail || data.error || "Unable to check volunteer SOS."
-      );
+  const loadVolunteerSOS = useCallback(async () => {
+    try {
+      const data = await request("/api/alerts/volunteer-sos/");
+      setVolunteerSOS(data.active ? data : null);
+      setSmsPreview(data.active ? data.sms_simulation || null : null);
+    } catch (err) {
+      console.error("Volunteer SOS refresh failed:", err.message);
     }
+  }, []);
 
-    setVolunteerSOSId(data.active ? data.emergency_id : null);
-    setVolunteerSOSStatus(data.active ? data.status : "");
-    setVolunteerSmsSimulation(data.active ? (data.sms_simulation || null) : null);
-  } catch (err) {
-    console.error("Volunteer SOS check failed:", err.message);
-  }
-}, []);
+  useEffect(() => {
+    loadEmergencies();
+    loadSensors();
+    loadVolunteerSOS();
 
-const handleVolunteerSOS = async () => {
-  if (volunteerSOSLoading || volunteerSOSId) return;
+    const timer = setInterval(() => {
+      loadEmergencies();
+      loadSensors();
+      loadVolunteerSOS();
+    }, REFRESH_MS);
 
-  const confirmed = window.confirm(
-    "Send a VOLUNTEER SOS to other approved volunteers? This is a safety emergency alert."
+    return () => clearInterval(timer);
+  }, [loadEmergencies, loadSensors, loadVolunteerSOS]);
+
+  const latestSensor = (() => {
+    if (Array.isArray(sensorData)) return sensorData[0] || null;
+    if (Array.isArray(sensorData?.results)) return sensorData.results[0] || null;
+    return sensorData;
+  })();
+
+  const x = Number(latestSensor?.acceleration_x ?? 0);
+  const y = Number(latestSensor?.acceleration_y ?? 0);
+  const z = Number(latestSensor?.acceleration_z ?? 0);
+  const hasSensor = Boolean(latestSensor);
+  const magnitude = Math.sqrt(x * x + y * y + z * z);
+  const fallDetected = hasSensor && magnitude >= THRESHOLD;
+
+  const allAlerts = [...emergencies, ...assigned]
+  .filter(
+    (item) =>
+      !["cancelled", "canceled", "resolved", "closed"].includes(
+        String(item.status || "").toLowerCase()
+      )
+  )
+  .filter(
+    (item, index, list) =>
+      list.findIndex((other) => other.id === item.id) === index
   );
 
-  if (!confirmed) return;
-
-  const token = localStorage.getItem("authToken");
-
-  if (!token) {
-    setVolunteerSOSMessage("Please log in again.");
-    return;
-  }
-
-  setVolunteerSOSLoading(true);
-  setVolunteerSOSMessage("");
-
-  try {
-    // Demo coordinates only. This is NOT real GPS.
-    const response = await fetch("/api/alerts/volunteer-sos/", {
-      method: "POST",
-      headers: {
-        Authorization: `Token ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        latitude: 12.9716,
-        longitude: 77.5946,
-      }),
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(
-        data.detail || data.error || "Unable to send volunteer SOS."
-      );
-    }
-
-    setVolunteerSOSId(data.emergency_id);
-    setVolunteerSOSStatus(data.status || "active");
-    setVolunteerSmsSimulation(data.sms_simulation || null);
-
-    setVolunteerSOSMessage(
-      data.message || "Volunteer SOS sent successfully."
-    );
-
-    window.alert(
-      `VOLUNTEER SOS SENT\n\nEmergency #${data.emergency_id}\nOther approved volunteers have been notified.\n\nLocation is simulated.`
-    );
-
-    await fetchVolunteerSOS();
-  } catch (err) {
-    setVolunteerSOSMessage(err.message || "Unable to send volunteer SOS.");
-    window.alert(`SOS FAILED\n\n${err.message}`);
-  } finally {
-    setVolunteerSOSLoading(false);
-  }
-};
-
-const handleCancelVolunteerSOS = async () => {
-  if (!volunteerSOSId || volunteerSOSLoading) return;
-
-  const confirmed = window.confirm(
-    `Cancel your Volunteer SOS #${volunteerSOSId}?`
-  );
-
-  if (!confirmed) return;
-
-  const token = localStorage.getItem("authToken");
-
-  if (!token) {
-    setVolunteerSOSMessage("Please log in again.");
-    return;
-  }
-
-  setVolunteerSOSLoading(true);
-  setVolunteerSOSMessage("");
-
-  try {
-    const response = await fetch(
-      `/api/alerts/${volunteerSOSId}/cancel/`,
-      {
+  async function activateSOS() {
+    if (sosBusy || volunteerSOS) return;
+    setSosBusy(true);
+    setNotice("");
+    try {
+      const data = await request("/api/alerts/volunteer-sos/", {
         method: "POST",
-        headers: {
-          Authorization: `Token ${token}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(
-        data.detail || data.error || "Unable to cancel volunteer SOS."
+        body: JSON.stringify({ latitude: 12.9716, longitude: 77.5946 }),
+      });
+      setVolunteerSOS({
+        active: true,
+        emergency_id: data.emergency_id,
+        status: data.status || "active",
+      });
+      setSmsPreview(data.sms_simulation || null);
+      setNotice(
+        `${data.message || "Volunteer SOS activated."} ` +
+        `In-app alerts created for ${data.notifications_created ?? 0} other approved volunteer(s). ` +
+        "No alert is sent to your own account; SMS is simulation only."
       );
+      await loadVolunteerSOS();
+      await loadEmergencies();
+    } catch (err) {
+      setNotice(`SOS failed: ${err.message}`);
+    } finally {
+      setSosBusy(false);
     }
-
-    setVolunteerSOSId(null);
-    setVolunteerSOSStatus("");
-    setVolunteerSOSMessage(
-      `Volunteer SOS #${data.emergency_id} cancelled successfully.`
-    );
-
-    window.alert(
-      `VOLUNTEER SOS CANCELLED\n\nEmergency #${data.emergency_id} has been cancelled.`
-    );
-  } catch (err) {
-    setVolunteerSOSMessage(
-      err.message || "Unable to cancel volunteer SOS."
-    );
-    window.alert(`CANCELLATION FAILED\n\n${err.message}`);
-  } finally {
-    setVolunteerSOSLoading(false);
   }
-};
 
-useEffect(() => {
-  fetchVolunteerSOS();
+  async function cancelSOS() {
+    if (!volunteerSOS?.emergency_id || sosBusy) return;
+    if (!window.confirm("Cancel your active volunteer SOS?")) return;
 
-  const interval = setInterval(fetchVolunteerSOS, 5000);
-
-  return () => clearInterval(interval);
-}, [fetchVolunteerSOS]);
-
-const fetchAssignedEmergencies = useCallback(async () => {
-  const token = localStorage.getItem("authToken");
-  if (!token) return;
-
-  try {
-    const response = await fetch("/api/alerts/mine/", {
-      headers: {
-        Authorization: `Token ${token}`,
-      },
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(
-        data.detail || data.error || "Unable to load assigned emergencies."
+    setSosBusy(true);
+    try {
+      const data = await request(
+        `/api/alerts/${volunteerSOS.emergency_id}/cancel/`,
+        { method: "POST", body: JSON.stringify({}) }
       );
+      setVolunteerSOS(null);
+      setSmsPreview(null);
+      setNotice(data.message || "Volunteer SOS cancelled.");
+    } catch (err) {
+      setNotice(`Could not cancel SOS: ${err.message}`);
+    } finally {
+      setSosBusy(false);
     }
-
-    setAssignedEmergencies(Array.isArray(data) ? data : data.results || []);
-  } catch (err) {
-    console.error("Assigned emergencies:", err.message);
-  }
-}, []);
-
-useEffect(() => {
-  fetchEmergencies();
-  fetchAssignedEmergencies();
-
-  const interval = setInterval(() => {
-    fetchEmergencies();
-    fetchAssignedEmergencies();
-  }, 5000);
-
-  return () => clearInterval(interval);
-}, [fetchEmergencies, fetchAssignedEmergencies]);
-  
-const handleAccept = async (id) => {
-  if (acceptingId !== null) return;
-
-  const token = localStorage.getItem("authToken");
-
-  if (!token) {
-    setMessage("Please log in again.");
-    return;
   }
 
-  setAcceptingId(id);
-  setMessage("");
-
-  try {
-    const response = await fetch(`/api/alerts/${id}/respond/`, {
-      method: "POST",
-      headers: {
-        Authorization: `Token ${token}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(
-        data.detail || data.error || "This alert could not be accepted."
-      );
+  async function acceptEmergency(id) {
+    setBusyId(id);
+    setNotice("");
+    try {
+      const data = await request(`/api/alerts/${id}/respond/`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      setNotice(data.message || `Emergency #${id} accepted.`);
+      await loadEmergencies();
+    } catch (err) {
+      setNotice(err.message);
+    } finally {
+      setBusyId(null);
     }
-
-    setMessage(`Emergency #${id} accepted successfully.`);
-
-    // Load assigned emergencies from Django's database.
-    await fetchAssignedEmergencies();
-
-    // Refresh the available emergency inbox.
-    await fetchEmergencies();
-  } catch (err) {
-    setMessage(err.message || "Unable to accept this emergency.");
-    await fetchEmergencies();
-  } finally {
-    setAcceptingId(null);
-  }
-};
-
-  
-const handleReject = async (id) => {
-  if (rejectingId !== null) return;
-
-  const confirmed = window.confirm(
-    `You accepted Emergency #${id}. Rejecting will release it so another approved volunteer can respond. Continue?`
-  );
-
-  if (!confirmed) return;
-
-  const token = localStorage.getItem("authToken");
-
-  if (!token) {
-    setMessage("Please log in again.");
-    return;
   }
 
-  setRejectingId(id);
-  setMessage("");
-
-  try {
-    const response = await fetch(`/api/alerts/${id}/reject/`, {
-      method: "POST",
-      headers: {
-        Authorization: `Token ${token}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(
-        data.detail || data.error || "Unable to release this emergency."
-      );
+  async function releaseEmergency(id) {
+    if (!window.confirm(`Release emergency #${id}?`)) return;
+    setBusyId(id);
+    try {
+      const data = await request(`/api/alerts/${id}/reject/`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      setNotice(data.message || `Emergency #${id} released.`);
+      await loadEmergencies();
+    } catch (err) {
+      setNotice(err.message);
+    } finally {
+      setBusyId(null);
     }
-
-    setMessage(
-      data.message || `Emergency #${id} released for another volunteer.`
-    );
-
-    // Refresh both lists from the backend.
-    await fetchAssignedEmergencies();
-    await fetchEmergencies();
-
-  } catch (err) {
-    setMessage(err.message || "Unable to reject this emergency.");
-    await fetchAssignedEmergencies();
-    await fetchEmergencies();
-  } finally {
-    setRejectingId(null);
   }
-};
 
+  const name = currentUser?.full_name || currentUser?.username || "Volunteer";
+  const navItems = [
+    ["dashboard", "Dashboard"],
+    ["emergencies", "Emergency Alerts"],
+    ["locations", "Live Locations"],
+    ["sensors", "Sensor Monitoring"],
+    ["history", "Alert History"],
+    ["device", "Device Information"],
+  ];
 
-  const formatTime = (value) => {
-    if (!value) return "Time unavailable";
-    const date = new Date(value);
-    return Number.isNaN(date.getTime())
-      ? "Time unavailable"
-      : date.toLocaleString();
-  };
+  const sensorApiStatus = sensorLoading
+    ? "Checking…"
+    : sensorError
+      ? "Unavailable"
+      : "Reachable";
 
-  const goToTab = (tab, sectionId) => {
-    setActiveTab(tab);
-    document.getElementById(sectionId)?.scrollIntoView({
-      behavior: "smooth",
-      block: "start",
-    });
-  };
-  if (showProfile) {
+  const smsItems = Array.isArray(smsPreview)
+    ? smsPreview
+    : smsPreview?.messages || smsPreview?.recipients || [];
+
   return (
-    <Profile
-      onBack={() => {
-        setShowProfile(false);
-        setActiveTab("inbox");
-      }}
-    />
-  );
-}
-  return (
-    <div className="volunteer-shell">
-      <aside className="volunteer-sidebar">
-        <div className="volunteer-brand">
-          <div className="volunteer-brand-icon">✳</div>
-          <div>
-            <strong>
-              SAFEGUARD<span>.</span>
-            </strong>
-            <small>VOLUNTEER ACCOUNT</small>
+    <main className="volunteer-shell app-shell">
+      <header className="v-header">
+        <div>
+          <p className="v-eyebrow">SAFEGUARD / VOLUNTEER WORKSPACE</p>
+          <h1>{navItems.find(([id]) => id === tab)?.[1] || "Dashboard"}</h1>
+          <p className="v-subtitle">Emergency response and safety monitoring</p>
+        </div>
+        <div className="v-header-right">
+          <span className="v-online">● System Online</span>
+          <div className="v-user">
+            <span className="v-user-avatar">{name.charAt(0).toUpperCase()}</span>
+            <span><strong>{name}</strong><small>Volunteer Account</small></span>
           </div>
         </div>
+      </header>
 
-        <div className="volunteer-nav-label">OPERATIONS</div>
-
-        <button type="button" className={`volunteer-nav-item ${activeTab === "dashboard" ? "selected" : ""}`} onClick={() => goToTab("dashboard", "volunteer-dashboard-top")}><span>▦</span> Dashboard</button>
-        <button type="button" className={`volunteer-nav-item ${activeTab === "inbox" ? "selected" : ""}`} onClick={() => goToTab("inbox", "emergency-inbox")}><span>♧</span> Emergency Alerts</button>
-        <button type="button" className={`volunteer-nav-item ${activeTab === "location" ? "selected" : ""}`} onClick={() => goToTab("location", "live-location")}><span>⌖</span> Live Location</button>
-        <button type="button" className={`volunteer-nav-item ${activeTab === "sensors" ? "selected" : ""}`} onClick={() => goToTab("sensors", "sensor-monitoring")}><span>⌁</span> Sensor Monitoring</button>
-        <button type="button" className={`volunteer-nav-item ${activeTab === "history" ? "selected" : ""}`} onClick={() => goToTab("history", "response-status")}><span>◷</span> Alert History</button>
-        <button type="button" className={`volunteer-nav-item ${activeTab === "device" ? "selected" : ""}`} onClick={() => goToTab("device", "device-status")}><span>▣</span> Device</button>
-        <button
-  type="button"
-  className={`volunteer-nav-item ${
-    activeTab === "profile" ? "selected" : ""
-  }`}
-  onClick={() => {
-    setActiveTab("profile");
-    setShowProfile(true);
-  }}
->
-  <span>♙</span> My Profile
-</button>
-
-        <div className="volunteer-sidebar-bottom">
-          <div className="volunteer-profile">
-            <div className="volunteer-avatar">
-              {(currentUser?.username || "V").slice(0, 1).toUpperCase()}
-            </div>
-            <div>
-              <strong>{currentUser?.username || "Volunteer"}</strong>
-              <small>Approved volunteer</small>
-            </div>
-          </div>
-          <button type="button" className="volunteer-logout" onClick={onLogout}>
-            ↪ Log out
-          </button>
+      <aside className="sidebar v-sidebar">
+        <div className="sidebar-brand">
+          <div className="brand-logo"><span>✳</span></div>
+          <div><strong>SAFEGUARD<span className="brand-dot">.</span></strong><small>INTELLIGENT SAFETY SYSTEM</small></div>
         </div>
+        <div className="nav-label">WORKSPACE</div>
+        <nav className="side-nav">
+          {navItems.map(([id, label]) => (
+            <button key={id} className={`nav-item ${tab === id ? "active" : ""}`} onClick={() => setTab(id)}>
+              <span>{({dashboard:"▦", emergencies:"♧", locations:"⌖", sensors:"⌁", history:"◷", device:"▣"})[id]}</span>{label}
+            </button>
+          ))}
+        </nav>
+        <div className="sidebar-spacer" />
+        <div className="sidebar-promo"><div className="promo-orbit">✦</div><strong>Ready to help.</strong><p>Review alerts and respond when someone needs assistance.</p></div>
+        {onLogout && <button className="sidebar-logout" onClick={onLogout}><span>↪</span>Log out</button>}
       </aside>
 
-      <main className="volunteer-main" id="volunteer-dashboard-top">
-        <header className="volunteer-topbar">
-          <div>
-            <div className="volunteer-breadcrumb">
-              SAFEGUARD <span>/</span> VOLUNTEER ACCOUNT
-            </div>
-            <h1>Dashboard</h1>
-            <p>Monitor incoming emergencies and coordinate your response.</p>
-          </div>
+      {notice && <div className="v-notice" role="status">{notice}</div>}
+      {error && <div className="v-notice v-error" role="alert">{error}</div>}
 
-          <div className="volunteer-online">
-            <span />
-            RESPONSE SYSTEM
-          </div>
-        </header>
+      {tab === "dashboard" && (
+        <>
+          <section className="v-stats metric-grid">
+            <article className="v-card metric-card tone-coral v-stat v-stat-red">
+              <span className="v-chip red">Emergency response</span>
+              <p>Active Emergencies</p>
+              <strong>{emergencies.length}</strong>
+              <small>Alerts awaiting response</small>
+            </article>
+            <article className="v-card metric-card tone-blue v-stat v-stat-blue">
+              <span className="v-chip blue">Assignments</span>
+              <p>Assigned Emergencies</p>
+              <strong>{assigned.length}</strong>
+              <small>Emergencies assigned to you</small>
+            </article>
+            <article className="v-card metric-card tone-violet v-stat v-stat-purple">
+              <span className="v-chip purple">Sensor data</span>
+              <p>Acceleration Magnitude</p>
+              <strong>{hasSensor ? magnitude.toFixed(2) : "—"}</strong>
+              <small>Latest available reading</small>
+            </article>
+            <article className="v-card metric-card tone-mint v-stat v-stat-green">
+              <span className="v-chip green">{!hasSensor ? "No data" : fallDetected ? "Review" : "Within range"}</span>
+              <p>Safety Status</p>
+              <strong>{!hasSensor ? "UNKNOWN" : fallDetected ? "REVIEW" : "NORMAL"}</strong>
+              <small>{!hasSensor ? "No sensor record" : "Prototype threshold assessment"}</small>
+            </article>
+          </section>
 
-        <section className="volunteer-welcome">
-          <div>
-            <span className="volunteer-eyebrow">VOLUNTEER OPERATIONS</span>
-            <h2>Ready to respond, {currentUser?.username || "Volunteer"}?</h2>
-            <p>
-              Review incoming SOS alerts and accept an emergency when you are
-              ready to respond.
-            </p>
-          </div>
-          <div className="volunteer-welcome-icon">♧</div>
+          <section className="v-dashboard-grid primary-grid">
+            <article className="v-card v-sos-card">
+              <div className="v-card-heading">
+                <span className="v-icon red-bg">♧</span>
+                <div><h2>Emergency SOS</h2><p>Send an alert for your own safety.</p></div>
+              </div>
+
+              {volunteerSOS ? (
+                <>
+                  <div className="v-status-alert">Volunteer SOS #{volunteerSOS.emergency_id} is active.</div>
+                  <button className="v-cancel-button" onClick={cancelSOS} disabled={sosBusy}>
+                    {sosBusy ? "Processing…" : "CANCEL VOLUNTEER SOS"}
+                  </button>
+                </>
+              ) : (
+                <button className="v-sos-button" onClick={activateSOS} disabled={sosBusy}>
+                  {sosBusy ? "ACTIVATING…" : "♧ ACTIVATE EMERGENCY SOS"}
+                </button>
+              )}
+
+              <p className="v-footnote">Prototype only. Coordinates are simulated, not live GPS.</p>
+
+              {smsPreview && (
+                <div className="v-sms-box">
+                  <strong>SMS PREVIEW — SIMULATED, NOT SENT</strong>
+                  {smsItems.length ? smsItems.map((item, i) => (
+                    <p key={i}>{typeof item === "string" ? item : `${item.name || item.phone || "Contact"}: ${item.message || item.body || item.phone || ""}`}</p>
+                  )) : <p>SMS preview details were not returned by the API.</p>}
+                  {smsPreview.status_display && <small>{smsPreview.status_display}</small>}
+                </div>
+              )}
+            </article>
+
+            <article className="v-card">
+              <div className="v-card-heading">
+                <span className="v-icon blue-bg">ϟ</span>
+                <div><h2>Fall Detection</h2><p>Accelerometer-based indicator</p></div>
+              </div>
+              <div className={fallDetected ? "v-status-alert" : "v-status-ok"}>
+                {sensorLoading && !hasSensor ? "Loading sensor readings…" :
+                  !hasSensor ? "No sensor record available." :
+                    fallDetected ? "Reading reached the demo threshold. Review required." :
+                      "Latest reading is below the demo threshold."}
+              </div>
+              <div className="v-mini-grid">
+                <div><small>Acceleration magnitude</small><strong>{hasSensor ? magnitude.toFixed(2) : "—"}</strong></div>
+                <div><small>Demo threshold</small><strong>{THRESHOLD.toFixed(2)}</strong></div>
+              </div>
+              <p className="v-footnote">Prototype indicator only; not a certified fall detection system.</p>
+            </article>
+
+            <article className="v-card">
+              <div className="v-card-heading">
+                <span className="v-icon blue-bg">▣</span>
+                <div><h2>Device Information</h2><p>Tracker status overview</p></div>
+              </div>
+              <div className="v-mini-grid">
+                <div><small>Device ID</small><strong>{latestSensor?.device_id || "TRACKER001 (demo)"}</strong></div>
+                <div><small>Controller</small><strong>{latestSensor?.controller || "ESP32-S3 (demo)"}</strong></div>
+                <div><small>Sensor API</small><strong>{sensorApiStatus}</strong></div>
+                <div><small>Refresh interval</small><strong>5 seconds</strong></div>
+              </div>
+              <p className="v-footnote">API availability does not confirm physical hardware connectivity.</p>
+            </article>
+
+            <article className="v-card v-wide">
+              <div className="v-card-heading">
+                <span className="v-icon purple-bg">✦</span>
+                <div><h2>Active Emergencies</h2><p>Respond to people who need help.</p></div>
+                <button className="v-small-button" onClick={() => setTab("emergencies")}>View all</button>
+              </div>
+              {loading ? <div className="v-empty">Loading emergency alerts…</div> :
+                emergencies.length === 0 ? <div className="v-empty">No active emergency alerts right now.</div> :
+                  <div className="v-alert-list">
+                    {emergencies.slice(0, 4).map((item) => (
+                      <article className="v-alert-item" key={item.id}>
+                        <div className="v-alert-top">
+                          <strong>Emergency #{item.id}</strong>
+                          <span className="v-chip red">{item.status || "ACTIVE"}</span>
+                        </div>
+                        <p><b>Person:</b> {item.user_full_name || item.username || "User"}</p>
+                        <p><b>Emergency contact:</b> {item.emergency_contact_name || "Not provided"} · {item.emergency_contact_phone || "No phone"}</p>
+                        {item.latitude != null && item.longitude != null && (
+                          <p><a href={`https://www.google.com/maps?q=${item.latitude},${item.longitude}`} target="_blank" rel="noreferrer">Open location in Google Maps ↗</a></p>
+                        )}
+                        <button className="v-primary-button" disabled={busyId !== null} onClick={() => acceptEmergency(item.id)}>
+                          {busyId === item.id ? "Accepting…" : "Accept emergency"}
+                        </button>
+                      </article>
+                    ))}
+                  </div>}
+            </article>
+
+            <article className="v-card">
+              <div className="v-card-heading">
+                <span className="v-icon green-bg">⌖</span>
+                <div><h2>Quick Actions</h2><p>Jump to a section</p></div>
+              </div>
+              <div className="v-quick-actions">
+                <button onClick={() => setTab("locations")}>⌖<span>Locations</span><small>View locations</small></button>
+                <button onClick={() => setTab("emergencies")}>♧<span>Emergencies</span><small>Respond to alerts</small></button>
+                <button onClick={() => setTab("sensors")}>ϟ<span>Sensors</span><small>Latest readings</small></button>
+                <button onClick={() => setTab("history")}>◷<span>History</span><small>View assignments</small></button>
+              </div>
+            </article>
+          </section>
+        </>
+      )}
+
+      {tab === "emergencies" && (
+        <section className="v-card">
+          <h2>Active Emergency Alerts</h2>
+          <p className="v-subtitle">Review details before responding.</p>
+          {loading ? <div className="v-empty">Loading…</div> : emergencies.length === 0 ?
+            <div className="v-empty">No active emergencies.</div> :
+            <div className="v-alert-list">{emergencies.map((item) => (
+              <article className="v-alert-item" key={item.id}>
+                <div className="v-alert-top"><strong>Emergency #{item.id}</strong><span className="v-chip red">{item.status || "ACTIVE"}</span></div>
+                <p><b>Person:</b> {item.user_full_name || item.username || "User"}</p>
+                <p><b>Contact:</b> {item.emergency_contact_name || "Not provided"} · {item.emergency_contact_phone || "No phone"}</p>
+                {item.latitude != null && item.longitude != null && <p>Location: {item.latitude}, {item.longitude} · <a href={`https://www.google.com/maps?q=${item.latitude},${item.longitude}`} target="_blank" rel="noreferrer">Open Maps ↗</a></p>}
+                <p><b>Reported:</b> {item.created_at ? new Date(item.created_at).toLocaleString() : "Not provided"}</p>
+                <button className="v-primary-button" disabled={busyId !== null} onClick={() => acceptEmergency(item.id)}>{busyId === item.id ? "Accepting…" : "Accept emergency"}</button>
+              </article>
+            ))}</div>}
         </section>
-        
-<section
-  style={{
-    marginTop: "18px",
-    padding: "22px",
-    background: "#fff",
-    border: "1px solid #fecdd3",
-    borderRadius: "16px",
-    boxShadow: "0 5px 20px rgba(225, 29, 72, 0.06)",
-  }}
->
-  <div
-    style={{
-      display: "flex",
-      justifyContent: "space-between",
-      alignItems: "center",
-      gap: "16px",
-      flexWrap: "wrap",
-    }}
-  >
-    <div style={{ flex: "1", minWidth: "220px" }}>
-      <h2 style={{ margin: "0 0 8px", color: "#9f1239", fontSize: "19px" }}>
-        Volunteer Safety SOS
-      </h2>
+      )}
 
-      <p style={{ margin: 0, color: "#718096", fontSize: "12px", lineHeight: 1.7 }}>
-        Need help yourself? Alert other approved volunteers with your simulated
-        location.
+      {tab === "locations" && (
+  <>
+    <section className="v-card v-related-locations">
+      <h2>My Demo Location & Assigned People</h2>
+
+      <p className="v-subtitle">
+        Your location is dummy demo data while logged in.
+        Other people's locations appear only when they are related
+        to an emergency assigned to you.
       </p>
 
-      {volunteerSOSId && (
-        <p style={{ margin: "10px 0 0", color: "#be123c", fontSize: "12px" }}>
-          Emergency #{volunteerSOSId} · Status: {volunteerSOSStatus}
-        </p>
-      )}
-
-      {volunteerSOSMessage && (
-        <p role="status" style={{ margin: "10px 0 0", color: "#475569", fontSize: "12px" }}>
-          {volunteerSOSMessage}
-        </p>
-      )}
-
-      {volunteerSOSId && volunteerSmsSimulation && (
-        <div style={{ marginTop: "14px", padding: "14px", border: "1px solid #fecdd3", borderRadius: "12px", background: "#fff1f2", width: "100%", boxSizing: "border-box" }}>
-          <strong style={{ color: "#9f1239", fontSize: "13px" }}>Emergency contact & SMS preview</strong>
-          <p style={{ margin: "6px 0 10px", color: "#9f1239", fontSize: "11px", fontWeight: 800 }}>SIMULATION ONLY — NO REAL SMS SENT</p>
-          {volunteerSmsSimulation.recipients?.length ? volunteerSmsSimulation.recipients.map((contact, index) => (
-            <div key={`${contact.phone}-${index}`} style={{ marginTop: "9px", padding: "10px", borderRadius: "8px", background: "#fff", border: "1px solid #ffe4e6" }}>
-              <div style={{ fontSize: "12px", fontWeight: 800, color: "#334155" }}>{contact.recipient_name || "Emergency contact"}</div>
-              <div style={{ fontSize: "12px", marginTop: "3px" }}>Phone: <a href={`tel:${contact.phone}`}>{contact.phone}</a></div>
-              <div style={{ fontSize: "10px", fontWeight: 800, color: "#be123c", marginTop: "5px" }}>{contact.status_display || "SIMULATED — NOT SENT"}</div>
-              <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontFamily: "inherit", fontSize: "11px", lineHeight: 1.5, color: "#475569", margin: "7px 0 0" }}>{contact.message || volunteerSmsSimulation.message}</pre>
-            </div>
-          )) : (
-            <p style={{ fontSize: "12px", color: "#64748b", marginBottom: 0 }}>No emergency contacts with phone numbers are saved on your profile.</p>
-          )}
+      {relatedLocations.length === 0 ? (
+        <div className="v-empty">
+          No location records are available yet.
         </div>
-      )}
-    </div>
-
-    {!volunteerSOSId ? (
-      <button
-        type="button"
-        onClick={handleVolunteerSOS}
-        disabled={volunteerSOSLoading}
-        style={{
-          appearance: "none",
-          border: "none",
-          borderRadius: "12px",
-          padding: "15px 22px",
-          minHeight: "48px",
-          background: volunteerSOSLoading ? "#fda4af" : "#e11d48",
-          color: "#fff",
-          fontSize: "12px",
-          fontWeight: 900,
-          letterSpacing: "0.5px",
-          cursor: volunteerSOSLoading ? "wait" : "pointer",
-          boxShadow: "0 5px 14px rgba(225, 29, 72, 0.2)",
-        }}
-      >
-        {volunteerSOSLoading ? "SENDING SOS..." : "🆘 SOS — I NEED HELP"}
-      </button>
-    ) : (
-      <button
-        type="button"
-        onClick={handleCancelVolunteerSOS}
-        disabled={volunteerSOSLoading}
-        style={{
-          appearance: "none",
-          border: "1px solid #fecdd3",
-          borderRadius: "12px",
-          padding: "15px 22px",
-          minHeight: "48px",
-          background: "#fff1f2",
-          color: "#be123c",
-          fontSize: "12px",
-          fontWeight: 900,
-          cursor: volunteerSOSLoading ? "wait" : "pointer",
-        }}
-      >
-        {volunteerSOSLoading ? "PLEASE WAIT..." : "CANCEL MY SOS"}
-      </button>
-    )}
-  </div>
-
-  <p style={{ margin: "14px 0 0", color: "#94a3b8", fontSize: "10px" }}>
-    Demo mode: location is simulated; no real GPS or SMS is used.
-  </p>
-</section>
-
-        <section className="volunteer-stats" aria-label="Volunteer dashboard overview">
-          <article className="volunteer-stat"><span className="volunteer-stat-icon red">!</span><div><small>Active emergencies</small><strong>{emergencies.length}</strong><span>Awaiting response</span></div></article>
-          <article className="volunteer-stat"><span className="volunteer-stat-icon blue">✓</span><div><small>Assigned to me</small><strong>{assignedEmergencies.length}</strong><span>Accepted responses</span></div></article>
-          <article className="volunteer-stat"><span className="volunteer-stat-icon green">●</span><div><small>Volunteer access</small><strong className="access-approved">Approved</strong><span>Response enabled</span></div></article>
-          <article className="volunteer-stat"><span className="volunteer-stat-icon blue">↻</span><div><small>System refresh</small><strong>5 sec</strong><span>Automatic updates</span></div></article>
-        </section>
-
-        <section
-          className="volunteer-inbox-panel"
-          id="emergency-inbox"
-        >
-          <div className="volunteer-inbox-heading">
-            <div>
-              <h2>Incoming Emergency Alerts</h2>
-              <p>Only active, unassigned emergencies appear here.</p>
-            </div>
-            <button
-              type="button"
-              className="volunteer-refresh"
-              onClick={fetchEmergencies}
-              disabled={loading}
+      ) : (
+        <div className="v-related-location-grid">
+          {relatedLocations.map((item) => (
+            <article
+              className="v-related-location-item"
+              key={`${item.user_id}-${item.relation}`}
             >
-              ↻ Refresh
-            </button>
-          </div>
+              <div className="v-alert-top">
+                <strong>{item.full_name || item.username}</strong>
+                <span className="v-chip blue">
+                  {item.relation === "self"
+                    ? "YOU"
+                    : item.relation.replaceAll("_", " ").toUpperCase()}
+                </span>
+              </div>
 
-          {message && (
-            <div className="volunteer-message" role="status">
-              {message}
-            </div>
-          )}
+              <p>
+                {item.role}
+                {item.is_simulated
+                  ? " · DEMO LOCATION"
+                  : " · GPS LOCATION"}
+              </p>
 
-          {error && (
-            <div className="volunteer-error" role="alert">
-              <strong>Connection issue</strong>
-              <p>{error}</p>
-              <button type="button" onClick={fetchEmergencies}>
-                Try again
-              </button>
-            </div>
-          )}
+              <strong>
+                {Number(item.latitude).toFixed(6)},{" "}
+                {Number(item.longitude).toFixed(6)}
+              </strong>
 
-          {loading && emergencies.length === 0 ? (
-            <div className="volunteer-empty">
-              <div className="volunteer-empty-icon">↻</div>
-              <strong>Loading emergency inbox…</strong>
-              <p>Checking for active SOS alerts.</p>
-            </div>
-          ) : !error && emergencies.length === 0 ? (
-            <div className="volunteer-empty">
-              <div className="volunteer-empty-icon">✓</div>
-              <strong>You're all caught up</strong>
-              <p>No unassigned emergencies right now.</p>
-              <small>
-                {lastUpdated
-                  ? `Last checked at ${lastUpdated.toLocaleTimeString()}`
-                  : "The inbox refreshes automatically every 5 seconds."}
-              </small>
-            </div>
-          ) : (
-            <div className="volunteer-alert-list">
-              {emergencies.map((emergency) => (
-                <article
-                  className="volunteer-alert-card"
-                  key={emergency.id}
-                >
-                  <div className="volunteer-alert-top">
-                    <span className="volunteer-alert-symbol">SOS</span>
-                    <span className="volunteer-active-badge">
-                      <i /> ACTIVE
-                    </span>
-                  </div>
-
-                  <h3>Emergency #{emergency.id}</h3>
-                  <p className="volunteer-alert-description">
-                    {emergency.description || "No additional details provided."}
-                  </p>
-
-                  <div className="volunteer-alert-details">
-                    <div>
-                      <span>Person needing help</span>
-                      <strong>
-                        {emergency.user_full_name ||
-                          emergency.full_name ||
-                          emergency.username ||
-                          emergency.user_name ||
-                          "User details unavailable"}
-                      </strong>
-                    </div>
-                    <div>
-                      <span>Contact number</span>
-                      <strong>
-                        {emergency.user_phone ||
-                          emergency.phone ||
-                          "Not provided"}
-                      </strong>
-                    </div>
-                  </div>
-
-                  {emergency.emergency_contact_name && (
-                    <div className="volunteer-location">
-                      <span>☎</span>
-                      <div>
-                        <strong>Emergency contact</strong>
-                        <p>
-                          {emergency.emergency_contact_name}
-                          {emergency.emergency_contact_phone
-                            ? ` · ${emergency.emergency_contact_phone}`
-                            : ""}
-                        </p>
-                        {emergency.emergency_contact_phone && (
-                          <a href={`tel:${emergency.emergency_contact_phone}`}>
-                            Call emergency contact
-                          </a>
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="volunteer-alert-details">
-                    <div>
-                      <span>Reported</span>
-                      <strong>{formatTime(emergency.created_at)}</strong>
-                    </div>
-                    <div>
-                      <span>Status</span>
-                      <strong className="volunteer-status-text">
-                        {emergency.status || "active"}
-                      </strong>
-                    </div>
-                  </div>
-
-                  {emergency.latitude != null &&
-                    emergency.longitude != null && (
-                      <div className="volunteer-location">
-                        <span>⌖</span>
-                        <div>
-                          <strong>Reported coordinates</strong>
-                          <p>
-                            {emergency.latitude}, {emergency.longitude}
-                          </p>
-                          <a
-                            href={`https://www.google.com/maps?q=${encodeURIComponent(
-                              `${emergency.latitude},${emergency.longitude}`
-                            )}`}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            Open in Google Maps ↗
-                          </a>
-                        </div>
-                      </div>
-                    )}
-
-                  <button
-                    type="button"
-                    className="volunteer-accept"
-                    onClick={() => handleAccept(emergency.id)}
-                    disabled={acceptingId !== null}
-                  >
-                    {acceptingId === emergency.id
-                      ? "ACCEPTING EMERGENCY…"
-                      : "ACCEPT EMERGENCY →"}
-                  </button>
-                </article>
-              ))}
-            </div>
-          )}
-
-          <div className="volunteer-inbox-footer">
-            <span>
-              <i /> Automatic monitoring enabled
-            </span>
-            <span>
-              Last updated:{" "}
-              {lastUpdated ? lastUpdated.toLocaleTimeString() : "Waiting…"}
-            </span>
-          </div>
-        </section>
-
-        
-        <section className="volunteer-inbox-panel" id="live-location">
-          <div className="volunteer-inbox-heading"><div><h2>Live Location</h2><p>Location details attached to active and assigned emergencies.</p></div></div>
-          {[...emergencies, ...assignedEmergencies].filter((item, index, arr) => arr.findIndex((x) => x.id === item.id) === index && item.latitude != null && item.longitude != null).length ? (
-            <div className="volunteer-response-list">
-              {[...emergencies, ...assignedEmergencies].filter((item, index, arr) => arr.findIndex((x) => x.id === item.id) === index && item.latitude != null && item.longitude != null).map((item) => (
-                <article className="volunteer-response-card" key={`loc-${item.id}`}><div className="volunteer-response-check">⌖</div><div><strong>Emergency #{item.id}</strong><p>{item.user_full_name || item.username || "Person needing help"}</p><p>{item.latitude}, {item.longitude}</p><a href={`https://www.google.com/maps?q=${encodeURIComponent(`${item.latitude},${item.longitude}`)}`} target="_blank" rel="noreferrer">Open location in Google Maps ↗</a></div></article>
-              ))}
-            </div>
-          ) : <div className="volunteer-empty"><div className="volunteer-empty-icon">⌖</div><strong>No emergency location available</strong><p>Coordinates appear here when an active or assigned alert includes them.</p></div>}
-        </section>
-
-        <section className="volunteer-inbox-panel" id="sensor-monitoring">
-          <div className="volunteer-inbox-heading"><div><h2>Sensor Monitoring</h2><p>Sensor readings are shown only when the emergency API supplies them.</p></div></div>
-          <div className="volunteer-empty"><div className="volunteer-empty-icon">⌁</div><strong>Monitoring emergency reports</strong><p>This volunteer account does not directly control the user's hardware. Review reported details and locations from each emergency alert.</p></div>
-        </section>
-
-        <section className="volunteer-inbox-panel" id="device-status">
-          <div className="volunteer-inbox-heading"><div><h2>Device Status</h2><p>SAFEGUARD demo environment status.</p></div></div>
-          <div className="volunteer-response-card"><div className="volunteer-response-check">✓</div><div><strong>Volunteer console connected</strong><p>Emergency inbox, assigned responses, and volunteer SOS refresh automatically.</p><p>Location mode: simulated demo coordinates where indicated.</p></div><span className="volunteer-assigned-badge">ONLINE</span></div>
-        </section>
-
-<section
-  className="volunteer-inbox-panel volunteer-response-status"
-  id="response-status"
->
-  <div className="volunteer-inbox-heading">
-    <div>
-      <h2>Response Status</h2>
-      <p>Your assigned emergencies, saved in the database.</p>
-    </div>
-
-    <span className="volunteer-status-count">
-      {assignedEmergencies.length} ASSIGNED
-    </span>
-  </div>
-
-  {assignedEmergencies.length === 0 ? (
-    <div className="volunteer-empty">
-      <div className="volunteer-empty-icon">◉</div>
-      <strong>No assigned emergencies</strong>
-      <p>Accepted emergencies will appear here automatically.</p>
-    </div>
-  ) : (
-    <div className="volunteer-response-list">
-      {assignedEmergencies.map((item) => (
-        <article className="volunteer-response-card" key={item.id}>
-          <div className="volunteer-response-check">✓</div>
-
-          <div>
-            <strong>Emergency #{item.id}</strong>
-            <p>
-              Person: {item.user_full_name || item.username || "User"}
-            </p>
-            <p>
-              Status: {item.status}
-              {" · "}
-              Updated:{" "}
-              {item.updated_at
-                ? new Date(item.updated_at).toLocaleString()
-                : "—"}
-            </p>
-
-            {item.latitude != null && item.longitude != null && (
               <p>
                 <a
-                  href={`https://www.google.com/maps?q=${item.latitude},${item.longitude}`}
+                  href={
+                    item.maps_url ||
+                    `https://www.google.com/maps?q=${item.latitude},${item.longitude}`
+                  }
                   target="_blank"
                   rel="noreferrer"
                 >
-                  Open location in Google Maps ↗
+                  Open in Google Maps ↗
                 </a>
               </p>
-            )}
+
+              <small>
+                {item.updated_at
+                  ? `Updated ${new Date(item.updated_at).toLocaleTimeString()}`
+                  : "Waiting for update"}
+              </small>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+
+    <section className="v-card">
+      <h2>Emergency Locations</h2>
+
+      <p className="v-subtitle">
+        Live location is available only for emergencies assigned to you
+        while they remain in an eligible active status.
+      </p>
+
+      {allAlerts.length === 0 ? (
+        <div className="v-empty">
+          No emergency locations available yet.
+        </div>
+      ) : (
+        <div className="v-alert-list">
+          {allAlerts.map((item) => {
+            const liveLocation = assignedLiveLocations[item.id];
+
+            const latitude =
+              liveLocation?.latitude ?? item.latitude;
+
+            const longitude =
+              liveLocation?.longitude ?? item.longitude;
+
+            const isAssigned =
+              Boolean(liveLocation) &&
+              ["assigned", "responding"].includes(
+                String(item.status || "").toLowerCase()
+              );
+
+            return (
+              <article className="v-alert-item" key={item.id}>
+                <div className="v-alert-top">
+                  <strong>Emergency #{item.id}</strong>
+                  <span className="v-chip blue">
+                    {item.status || "Unknown"}
+                  </span>
+                </div>
+
+                <p>
+                  {item.user_full_name || item.username || "User"}
+                </p>
+
+                {latitude != null && longitude != null ? (
+                  <>
+                    <p>
+                      {Number(latitude).toFixed(6)},{" "}
+                      {Number(longitude).toFixed(6)}
+                    </p>
+
+                    <a
+                      href={`https://www.google.com/maps?q=${latitude},${longitude}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Open {isAssigned ? "live" : "reported"} location in Google Maps ↗
+                    </a>
+
+                    {isAssigned && liveLocation.updated_at && (
+                      <p className="v-footnote">
+                        Location updated:{" "}
+                        {new Date(
+                          liveLocation.updated_at
+                        ).toLocaleTimeString()}
+                      </p>
+                    )}
+
+                    {liveLocation?.location_is_simulated && (
+                      <p className="v-footnote">
+                        These coordinates are simulated.
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <p className="v-footnote">
+                    Location unavailable.
+                  </p>
+                )}
+
+                {!isAssigned && (
+                  <>
+                    <p className="v-footnote">
+                      Live tracking appears here after this emergency is
+                      assigned to you.
+                    </p>
+                    {String(item.status || "").toLowerCase() === "active" && (
+                      <button
+                        className="v-primary-button"
+                        disabled={busyId !== null}
+                        onClick={() => acceptEmergency(item.id)}
+                      >
+                        {busyId === item.id
+                          ? "Accepting…"
+                          : "Accept emergency to enable live tracking"}
+                      </button>
+                    )}
+                  </>
+                )}
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  </>
+)}
+
+      {tab === "sensors" && (
+        <section className="v-dashboard-grid primary-grid">
+          <article className="v-card v-wide">
+            <h2>Sensor Readings</h2><p className="v-subtitle">Latest accelerometer record</p>
+            {sensorError && <div className="v-status-alert">{sensorError}</div>}
+            {!hasSensor ? <div className="v-empty">{sensorLoading ? "Loading sensor data…" : "No sensor records returned by the API."}</div> :
+              <div className="v-mini-grid">
+                <div><small>X axis</small><strong>{x.toFixed(2)}</strong></div>
+                <div><small>Y axis</small><strong>{y.toFixed(2)}</strong></div>
+                <div><small>Z axis</small><strong>{z.toFixed(2)}</strong></div>
+                <div><small>Magnitude</small><strong>{magnitude.toFixed(2)}</strong></div>
+              </div>}
+            <p className="v-footnote">Only values returned by the API are displayed.</p>
+          </article>
+          <article className="v-card">
+            <h2>Current Sensor Assessment</h2>
+            <div className={fallDetected ? "v-status-alert" : "v-status-ok"}>
+              {!hasSensor ? "Sensor status unknown." : fallDetected ? "Reading at or above the demo threshold." : "Latest reading below the demo threshold."}
+            </div>
+          </article>
+        </section>
+      )}
+
+      {tab === "history" && (
+        <section className="v-card">
+          <h2>Assigned Emergencies & History</h2>
+          <p className="v-subtitle">Records returned by your assigned-emergency endpoint.</p>
+          {assigned.length === 0 ? <div className="v-empty">No assigned emergencies returned by the backend.</div> :
+            <div className="v-alert-list">{assigned.map((item) => (
+              <article className="v-alert-item" key={item.id}>
+                <div className="v-alert-top"><strong>Emergency #{item.id}</strong><span className="v-chip blue">{item.status || "Unknown"}</span></div>
+                <p><b>Person:</b> {item.user_full_name || item.username || "User"}</p>
+                <p><b>Contact:</b> {item.emergency_contact_name || "Not provided"} · {item.emergency_contact_phone || "No phone"}</p>
+                {item.latitude != null && item.longitude != null && <p><a href={`https://www.google.com/maps?q=${item.latitude},${item.longitude}`} target="_blank" rel="noreferrer">Open location ↗</a></p>}
+                <button className="v-secondary-button" disabled={busyId !== null} onClick={() => releaseEmergency(item.id)}>{busyId === item.id ? "Processing…" : "Reject / release"}</button>
+              </article>
+            ))}</div>}
+        </section>
+      )}
+
+      {tab === "device" && (
+        <section className="v-card">
+          <h2>Device Information</h2><p className="v-subtitle">Latest status available from the sensor API</p>
+          <div className="v-mini-grid">
+            <div><small>Device ID</small><strong>{latestSensor?.device_id || "TRACKER001 (demo)"}</strong></div>
+            <div><small>Controller</small><strong>{latestSensor?.controller || "ESP32-S3 (demo)"}</strong></div>
+            <div><small>Sensor API</small><strong>{sensorApiStatus}</strong></div>
+            <div><small>Last refresh</small><strong>{lastUpdated ? lastUpdated.toLocaleTimeString() : "Waiting…"}</strong></div>
           </div>
+          <p className="v-footnote">API reachable does not prove that physical hardware is connected.</p>
+        </section>
+      )}
 
-          <div className="response-status-actions">
-            <span className="volunteer-assigned-badge">
-              {item.status.toUpperCase()}
-            </span>
-
-            <button
-              type="button"
-              onClick={() => handleReject(item.id)}
-              disabled={rejectingId !== null}
-              style={{
-                appearance: "none",
-                WebkitAppearance: "none",
-                backgroundColor:
-                  rejectingId === item.id ? "#fda4af" : "#fff1f2",
-                color: "#e11d48",
-                border: "1px solid #fecdd3",
-                borderRadius: "9px",
-                padding: "10px 16px",
-                minHeight: "40px",
-                fontFamily: "inherit",
-                fontSize: "11px",
-                fontWeight: 800,
-                letterSpacing: "0.3px",
-                textTransform: "uppercase",
-                whiteSpace: "nowrap",
-                cursor:
-                  rejectingId === item.id ? "wait" : "pointer",
-                transition: "all 0.2s ease",
-              }}
-              onMouseEnter={(e) => {
-                if (rejectingId !== item.id) {
-                  e.currentTarget.style.backgroundColor = "#e11d48";
-                  e.currentTarget.style.color = "#ffffff";
-                  e.currentTarget.style.borderColor = "#e11d48";
-                  e.currentTarget.style.boxShadow =
-                    "0 4px 12px rgba(225, 29, 72, 0.18)";
-                }
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.backgroundColor = "#fff1f2";
-                e.currentTarget.style.color = "#e11d48";
-                e.currentTarget.style.borderColor = "#fecdd3";
-                e.currentTarget.style.boxShadow = "none";
-              }}
-            >
-              {rejectingId === item.id
-                ? "RELEASING..."
-                : "REJECT / RELEASE"}
-            </button>
-          </div>
-        </article>
-      ))}
-    </div>
-  )}
-</section>
-
-
-        <footer className="volunteer-footer">
-          <strong>SAFEGUARD.</strong>
-          <span>Volunteer Response Center · Safety prototype</span>
-        </footer>
-      </main>
-    </div>
+      <footer className="v-footer">
+        <span><b>SAFEGUARD.</b> Volunteer Response Center</span>
+        <span>{lastUpdated ? `Last updated ${lastUpdated.toLocaleTimeString()}` : "Waiting for data"}</span>
+        {onLogout && <button className="v-secondary-button" onClick={onLogout}>Log out</button>}
+      </footer>
+    </main>
   );
 }
-
-export default VolunteerDashboard;

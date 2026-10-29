@@ -1,4 +1,5 @@
 from django.db import transaction
+from math import radians, sin, cos, asin, sqrt
 from django.contrib.auth.models import User
 from django.utils import timezone
 
@@ -7,7 +8,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 
-from .models import Emergency, EmergencyNotification
+from .models import Emergency, EmergencyNotification, UserLocation
 from accounts.permissions import IsApprovedVolunteer
 from accounts.models import ParentChildLink, EmergencyContact
 
@@ -192,7 +193,14 @@ class RaiseEmergencyView(APIView):
                 ).values_list("parent_id", flat=True)
 
                 recipient_ids.update(parent_ids)
+            
+            elif profile.role == "parent":
+                child_ids = ParentChildLink.objects.filter(
+                    parent=request.user,
+                    child__isnull=False,
+                ).values_list("child_id", flat=True)
 
+                recipient_ids.update(child_ids)
             # Notify all approved volunteers.
             volunteer_ids = User.objects.filter(
                 profile__role="volunteer",
@@ -329,12 +337,13 @@ class EmergencyNotificationsView(APIView):
 
     def get(self, request):
         notifications = (
-            EmergencyNotification.objects.filter(
-                recipient=request.user
-            )
-            .select_related("emergency", "emergency__user")
-            .order_by("-created_at")
-        )
+    EmergencyNotification.objects.filter(
+        recipient=request.user,
+        emergency__status__in=["active", "assigned", "responding"],
+    )
+    .select_related("emergency", "emergency__user")
+    .order_by("-created_at")
+)
 
         results = []
 
@@ -585,17 +594,15 @@ class ActiveEmergenciesView(APIView):
     permission_classes = [IsAuthenticated, IsApprovedVolunteer]
 
     def get(self, request):
+        # Fetch all emergencies first, including cancelled ones.
         emergencies = (
-            Emergency.objects.filter(
-                status="active",
-                assigned_volunteer__isnull=True,
-            )
+            Emergency.objects
+            .exclude(user=request.user)
             .select_related("user", "user__profile")
-            .order_by("-created_at")
+            .order_by("-created_at", "-id")
         )
 
-        # Only display the newest active alert for each user.
-        # This also hides duplicate active alerts created previously.
+        # Keep only the newest emergency for each user.
         latest_by_user = {}
 
         for emergency in emergencies:
@@ -605,6 +612,14 @@ class ActiveEmergenciesView(APIView):
         results = []
 
         for emergency in latest_by_user.values():
+            # Skip cancelled, resolved, closed, or otherwise inactive alerts.
+            if str(emergency.status or "").lower() != "active":
+                continue
+
+            # Do not show emergencies already assigned to a volunteer.
+            if emergency.assigned_volunteer_id is not None:
+                continue
+
             user = emergency.user
             profile = getattr(user, "profile", None)
 
@@ -653,7 +668,6 @@ class ActiveEmergenciesView(APIView):
 
         return Response(results, status=status.HTTP_200_OK)
 
-
 class ParentChildEmergenciesView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -671,11 +685,13 @@ class ParentChildEmergenciesView(APIView):
         ).values_list("child_id", flat=True)
 
         emergencies = (
-            Emergency.objects.filter(user_id__in=child_ids)
-            .select_related("user", "user__profile", "assigned_volunteer")
-            .order_by("-created_at")
-        )
-
+    Emergency.objects.filter(
+        user_id__in=child_ids,
+        status__in=["active", "assigned", "responding"],
+    )
+    .select_related("user", "user__profile", "assigned_volunteer")
+    .order_by("-created_at")
+)   
         results = []
 
         for emergency in emergencies:
@@ -785,7 +801,41 @@ class CancelEmergencyView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+class ParentSOSStatusView(APIView):
+    permission_classes = [IsAuthenticated]
 
+    def get(self, request):
+        profile = getattr(request.user, "profile", None)
+
+        if profile is None or profile.role != "parent":
+            return Response(
+                {"error": "Only parent accounts can check parent SOS status."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        emergency = (
+            Emergency.objects.filter(
+                user=request.user,
+                status__in=["active", "assigned", "responding"],
+            )
+            .order_by("-created_at", "-id")
+            .first()
+        )
+
+        if emergency is None:
+            return Response(
+                {"active": False, "emergency_id": None},
+                status=status.HTTP_200_OK,
+            )
+
+        return Response(
+            {
+                "active": True,
+                "emergency_id": emergency.id,
+                "status": emergency.status,
+            },
+            status=status.HTTP_200_OK,
+        )
 class VolunteerSOSView(APIView):
     """
     Lets an approved volunteer raise and check their own safety SOS.
@@ -944,3 +994,349 @@ class VolunteerSOSView(APIView):
             },
             status=status.HTTP_201_CREATED,
         )
+
+
+
+# Bengaluru-only coarse geofence (approximate city bounds, not an official boundary).
+BENGALURU_BOUNDS = {
+    "min_latitude": 12.70,
+    "max_latitude": 13.20,
+    "min_longitude": 77.30,
+    "max_longitude": 77.95,
+}
+LOCATION_MIN_MOVEMENT_METRES = 20
+LOCATION_MAX_AGE_NOTE = "Location timestamp indicates when the device last updated."
+
+
+def is_inside_bengaluru(latitude, longitude):
+    return (
+        BENGALURU_BOUNDS["min_latitude"] <= latitude <= BENGALURU_BOUNDS["max_latitude"]
+        and BENGALURU_BOUNDS["min_longitude"] <= longitude <= BENGALURU_BOUNDS["max_longitude"]
+    )
+
+
+def distance_metres(lat1, lon1, lat2, lon2):
+    earth_radius_m = 6371000
+    dlat = radians(lat2 - lat1)
+    dlon = radians(lon2 - lon1)
+    a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2
+    return earth_radius_m * 2 * asin(sqrt(min(1, a)))
+
+
+class UserLiveLocationView(APIView):
+    """
+    POST: user accounts publish browser GPS; parent and volunteer accounts
+    publish demo coordinates. Locations are accepted inside Bengaluru bounds.
+    Parent and volunteer coordinates must be marked as simulated by the API consumer.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        profile = getattr(request.user, "profile", None)
+        if profile is None or profile.role not in ("user", "parent", "volunteer"):
+            return Response(
+                {"error": "Only user, parent, and volunteer accounts can publish their location."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        try:
+            latitude = float(request.data.get("latitude"))
+            longitude = float(request.data.get("longitude"))
+            accuracy = request.data.get("accuracy_m")
+            accuracy = float(accuracy) if accuracy is not None else None
+            if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+                raise ValueError
+            if accuracy is not None and not (0 <= accuracy <= 10000):
+                raise ValueError
+        except (TypeError, ValueError):
+            return Response(
+                {"error": "Valid latitude and longitude are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not is_inside_bengaluru(latitude, longitude):
+            return Response(
+                {
+                    "accepted": False,
+                    "outside_supported_area": True,
+                    "message": "Location is outside the supported Bengaluru area.",
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        current, _ = UserLocation.objects.get_or_create(
+            user=request.user,
+            defaults={
+                "latitude": latitude,
+                "longitude": longitude,
+                "accuracy_m": accuracy,
+            },
+        )
+
+        if current.pk and current.updated_at:
+            moved = distance_metres(
+                current.latitude, current.longitude, latitude, longitude
+            )
+            # Update if movement is meaningful OR 60 seconds have elapsed,
+            # so a stationary user's timestamp can still be refreshed.
+            elapsed = (timezone.now() - current.updated_at).total_seconds()
+            if moved < LOCATION_MIN_MOVEMENT_METRES and elapsed < 60:
+                return Response({
+                    "accepted": True,
+                    "updated": False,
+                    "reason": "movement_below_threshold",
+                    "latitude": current.latitude,
+                    "longitude": current.longitude,
+                    "updated_at": current.updated_at,
+                }, status=status.HTTP_200_OK)
+
+        current.latitude = latitude
+        current.longitude = longitude
+        current.accuracy_m = accuracy
+        current.save()
+
+        # Keep any currently active SOS coordinates in sync with the latest
+        # valid location, but do not create an SOS just for location tracking.
+        Emergency.objects.filter(
+            user=request.user,
+            status__in=["active", "assigned", "responding"],
+        ).update(
+            latitude=latitude,
+            longitude=longitude,
+            updated_at=timezone.now(),
+        )
+
+        return Response({
+            "accepted": True,
+            "updated": True,
+            "latitude": current.latitude,
+            "longitude": current.longitude,
+            "accuracy_m": current.accuracy_m,
+            "updated_at": current.updated_at,
+            "outside_supported_area": False,
+        }, status=status.HTTP_200_OK)
+
+
+class ParentLiveLocationsView(APIView):
+    """Return latest location for only the children linked to this parent."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        profile = getattr(request.user, "profile", None)
+        if profile is None or profile.role != "parent":
+            return Response(
+                {"error": "Only parent accounts can view linked child locations."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        child_ids = ParentChildLink.objects.filter(
+            parent=request.user
+        ).values_list("child_id", flat=True)
+
+        locations = (
+            UserLocation.objects.filter(user_id__in=child_ids)
+            .select_related("user", "user__profile")
+            .order_by("user__username")
+        )
+        results = []
+        for location in locations:
+            child = location.user
+            child_profile = getattr(child, "profile", None)
+            results.append({
+                "user_id": child.id,
+                "child_username": child.username,
+                "child_full_name": (
+                    child_profile.full_name
+                    if child_profile and child_profile.full_name
+                    else child.username
+                ),
+                "latitude": location.latitude,
+                "longitude": location.longitude,
+                "accuracy_m": location.accuracy_m,
+                "updated_at": location.updated_at,
+                "maps_url": f"https://maps.google.com/?q={location.latitude},{location.longitude}",
+                "outside_supported_area": not is_inside_bengaluru(
+                    location.latitude, location.longitude
+                ),
+            })
+        return Response(results, status=status.HTTP_200_OK)
+
+
+class RelatedLiveLocationsView(APIView):
+    """
+    Return only locations relevant to the authenticated account.
+    Parent and volunteer accounts use demo locations.
+    """
+    permission_classes = [IsAuthenticated]
+
+    ACTIVE_STATUSES = ["active", "assigned", "responding"]
+    ASSIGNED_STATUSES = ["assigned", "responding"]
+
+    def get(self, request):
+        profile = getattr(request.user, "profile", None)
+
+        if profile is None or profile.role not in (
+            "user", "parent", "volunteer"
+        ):
+            return Response(
+                {"error": "Unsupported account role."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        results = {}
+
+        def add_location(user, relation):
+            if user is None:
+                return
+
+            location = UserLocation.objects.filter(user=user).first()
+            if location is None:
+                return
+
+            related_profile = getattr(user, "profile", None)
+            role = related_profile.role if related_profile else "unknown"
+
+            results[user.id] = {
+                "user_id": user.id,
+                "username": user.username,
+                "full_name": (
+                    related_profile.full_name
+                    if related_profile and related_profile.full_name
+                    else user.username
+                ),
+                "role": role,
+                "relation": relation,
+                "latitude": location.latitude,
+                "longitude": location.longitude,
+                "accuracy_m": location.accuracy_m,
+                "is_simulated": role in ("parent", "volunteer"),
+                "updated_at": location.updated_at,
+                "maps_url": (
+                    f"https://maps.google.com/?q="
+                    f"{location.latitude},{location.longitude}"
+                ),
+            }
+
+        # Always show the signed-in account's own location.
+        add_location(request.user, "self")
+
+        if profile.role == "user":
+            parent_link = (
+                ParentChildLink.objects.filter(
+                    child=request.user,
+                    parent__isnull=False,
+                )
+                .select_related("parent")
+                .first()
+            )
+
+            if parent_link:
+                add_location(parent_link.parent, "linked_parent")
+
+            assignments = Emergency.objects.filter(
+                user=request.user,
+                status__in=self.ASSIGNED_STATUSES,
+                assigned_volunteer__isnull=False,
+            ).select_related("assigned_volunteer")
+
+            for emergency in assignments:
+                add_location(
+                    emergency.assigned_volunteer,
+                    "assigned_volunteer",
+                )
+
+        elif profile.role == "parent":
+            links = list(
+                ParentChildLink.objects.filter(
+                    parent=request.user
+                ).select_related("child")
+            )
+            child_ids = [link.child_id for link in links]
+
+            # Parent can see linked children's saved locations.
+            for link in links:
+                add_location(link.child, "linked_child")
+
+            # Only show volunteers assigned to an active emergency
+            # raised by this parent or one of their linked children.
+            assignments = Emergency.objects.filter(
+                user_id__in=child_ids + [request.user.id],
+                status__in=self.ASSIGNED_STATUSES,
+                assigned_volunteer__isnull=False,
+            ).select_related("assigned_volunteer")
+
+            for emergency in assignments:
+                add_location(
+                    emergency.assigned_volunteer,
+                    "assigned_volunteer_for_related_emergency",
+                )
+
+        elif profile.role == "volunteer":
+            # Only people involved in emergencies assigned to this volunteer.
+            assignments = Emergency.objects.filter(
+                assigned_volunteer=request.user,
+                status__in=self.ASSIGNED_STATUSES,
+            ).select_related("user")
+
+            for emergency in assignments:
+                add_location(emergency.user, "assigned_person")
+
+        return Response(
+            list(results.values()),
+            status=status.HTTP_200_OK,
+        )
+
+
+class AssignedEmergencyLiveLocationView(APIView):
+    """Volunteers can read live coordinates only for an emergency assigned to them."""
+    permission_classes = [IsAuthenticated, IsApprovedVolunteer]
+
+    def get(self, request, emergency_id):
+        try:
+            emergency = Emergency.objects.select_related("user").get(
+                id=emergency_id,
+                assigned_volunteer=request.user,
+                status__in=["assigned", "responding"],
+            )
+        except Emergency.DoesNotExist:
+            return Response(
+                {"error": "Live location is available only for an active emergency assigned to you."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        location = UserLocation.objects.filter(user=emergency.user).first()
+        latitude = location.latitude if location else emergency.latitude
+        longitude = location.longitude if location else emergency.longitude
+        updated_at = location.updated_at if location else emergency.updated_at
+        return Response({
+            "emergency_id": emergency.id,
+            "status": emergency.status,
+            "latitude": latitude,
+            "longitude": longitude,
+            "updated_at": updated_at,
+            "location_is_simulated": False if location else True,
+            "maps_url": (
+                f"https://maps.google.com/?q={latitude},{longitude}"
+                if latitude is not None and longitude is not None else None
+            ),
+        }, status=status.HTTP_200_OK)
+class MySOSStatusView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        emergency = Emergency.objects.filter(
+            user=request.user,
+            status__in=["active", "assigned", "responding"],
+        ).order_by("-created_at", "-id").first()
+
+        if emergency is None:
+            return Response({
+                "active": False,
+                "emergency_id": None,
+            }, status=status.HTTP_200_OK)
+
+        return Response({
+            "active": True,
+            "emergency_id": emergency.id,
+            "status": emergency.status,
+        }, status=status.HTTP_200_OK)

@@ -14,6 +14,9 @@ function App() {
   const [sosActive, setSosActive] = useState(false);
   const [fallDetected, setFallDetected] = useState(false);
   const [simulationMessage, setSimulationMessage] = useState("");
+  const [relatedLocations, setRelatedLocations] = useState([]);
+const [parentSosNotifications, setParentSosNotifications] = useState([]);
+const [acknowledgingParentNotification, setAcknowledgingParentNotification] = useState(null);
 const [simulationLoading, setSimulationLoading] = useState(false);
 
 const [simulatedLocation, setSimulatedLocation] = useState({
@@ -26,7 +29,10 @@ const [simulationScenario, setSimulationScenario] = useState("normal");
   const simulationTick = useRef(0);
   const simulatedLocationRef = useRef(simulatedLocation);
   const [sosLoading, setSosLoading] = useState(false);
+  const [sosStateLoading, setSosStateLoading] = useState(false);
   const [sosMessage, setSosMessage] = useState("");
+  const [gpsStatus, setGpsStatus] = useState("Waiting for GPS permission");
+  const [liveGps, setLiveGps] = useState(null);
   const [emergencyId, setEmergencyId] = useState(null);
   const [currentUser, setCurrentUser] = useState(() => {
     if (!localStorage.getItem("authToken")) return null;
@@ -207,6 +213,275 @@ const simulateSensor = async (scenario) => {
     const interval = setInterval(fetchSensorData, 5000);
     return () => clearInterval(interval);
   }, []);
+
+  // Share browser GPS only while a logged-in user account is open.
+  // The backend accepts updates only within the supported Bengaluru area.
+  useEffect(() => {
+  const role = currentUser?.role;
+  const token = localStorage.getItem("authToken");
+
+  if (!token || !["user", "parent", "volunteer"].includes(role)) {
+    setGpsStatus("Location sharing is available while logged in");
+    setLiveGps(null);
+    return;
+  }
+
+  let active = true;
+
+  // Parent and volunteer: publish dummy coordinates while logged in.
+  if (role === "parent" || role === "volunteer") {
+    const accountId = currentUser?.id ?? currentUser?.username ?? role;
+
+// Stable hash: different usernames/IDs are much less likely to collide.
+const identity = String(accountId);
+let hash = 2166136261;
+
+for (let i = 0; i < identity.length; i++) {
+  hash ^= identity.charCodeAt(i);
+  hash = Math.imul(hash, 16777619);
+}
+
+const seed = hash >>> 0;
+
+// Spread demo locations across the Bengaluru demo area.
+const baseLatitude = 12.90 + (seed % 3000) / 100000;
+const baseLongitude = 77.52 + ((seed >>> 12) % 5000) / 100000;
+
+let tick = 0;
+
+    setGpsStatus("Demo location active · not real GPS");
+
+    const publishDemoLocation = async () => {
+      const coords = {
+        latitude: Number(
+          (baseLatitude + Math.sin(tick / 3) * 0.00055).toFixed(6)
+        ),
+        longitude: Number(
+          (baseLongitude + Math.cos(tick / 3) * 0.00055).toFixed(6)
+        ),
+        is_simulated: true,
+      };
+
+      tick += 1;
+
+      if (!active) return;
+
+      setLiveGps({
+        ...coords,
+        accuracy_m: null,
+        is_simulated: true,
+      });
+
+      try {
+        const response = await fetch("/api/alerts/location/update/", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Token ${token}`,
+          },
+          body: JSON.stringify(coords),
+        });
+
+        const data = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          throw new Error(
+            data.error || data.detail || "Demo location update failed."
+          );
+        }
+
+        if (active && data.outside_supported_area) {
+          setGpsStatus("Demo coordinates outside supported area");
+        }
+      } catch (err) {
+        if (active) {
+          setGpsStatus(err.message || "Unable to publish demo location");
+        }
+      }
+    };
+
+    void publishDemoLocation();
+    const interval = setInterval(publishDemoLocation, 5000);
+
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }
+
+  // User accounts continue to use browser GPS.
+  if (!("geolocation" in navigator)) {
+    setGpsStatus("This browser does not support GPS location");
+    return;
+  }
+
+  setGpsStatus("Requesting browser GPS permission…");
+
+  const watchId = navigator.geolocation.watchPosition(
+    async (position) => {
+      if (!active) return;
+
+      const coords = {
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        accuracy_m: position.coords.accuracy,
+        is_simulated: false,
+      };
+
+      setLiveGps(coords);
+
+      try {
+        const response = await fetch("/api/alerts/location/update/", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Token ${token}`,
+          },
+          body: JSON.stringify(coords),
+        });
+
+        const data = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          throw new Error(
+            data.error || data.detail || "Location update failed."
+          );
+        }
+
+        if (!active) return;
+
+        setGpsStatus(
+          data.outside_supported_area
+            ? "Outside supported Bengaluru area"
+            : "Live GPS active · Bengaluru area"
+        );
+      } catch (err) {
+        if (active) {
+          setGpsStatus(err.message || "Unable to share GPS location");
+        }
+      }
+    },
+    (err) => {
+      if (!active) return;
+
+      const messages = {
+        1: "Location permission denied. Allow location access in your browser.",
+        2: "GPS location is currently unavailable.",
+        3: "GPS request timed out. Waiting for another update…",
+      };
+
+      setGpsStatus(messages[err.code] || "Unable to access GPS location");
+    },
+    {
+      enableHighAccuracy: true,
+      maximumAge: 5000,
+      timeout: 15000,
+    }
+  );
+
+  return () => {
+    active = false;
+    navigator.geolocation.clearWatch(watchId);
+  };
+}, [currentUser?.role, currentUser?.username]);
+
+useEffect(() => {
+  if (currentUser?.role !== "user") {
+    setParentSosNotifications([]);
+    setRelatedLocations([]);
+    return;
+  }
+
+  const token = localStorage.getItem("authToken");
+  if (!token) return;
+
+  let active = true;
+
+  const loadParentSafetyData = async () => {
+    try {
+      const [notificationResponse, locationResponse] = await Promise.all([
+        fetch("/api/alerts/notifications/", {
+          headers: { Authorization: `Token ${token}` },
+        }),
+        fetch("/api/alerts/related/locations/", {
+          headers: { Authorization: `Token ${token}` },
+        }),
+      ]);
+
+      if (notificationResponse.ok) {
+        const data = await notificationResponse.json();
+
+        if (active) {
+          setParentSosNotifications(
+            (Array.isArray(data) ? data : []).filter((item) =>
+              String(item.message || "").toLowerCase().includes("parent")
+            )
+          );
+        }
+      }
+
+      if (locationResponse.ok) {
+        const data = await locationResponse.json();
+
+        if (active) {
+          setRelatedLocations(
+            Array.isArray(data) ? data : data.results || []
+          );
+        }
+      }
+    } catch (err) {
+      console.warn("Unable to refresh linked safety updates:", err);
+    }
+  };
+
+  void loadParentSafetyData();
+  const interval = setInterval(loadParentSafetyData, 5000);
+
+  return () => {
+    active = false;
+    clearInterval(interval);
+  };
+}, [currentUser?.role]);
+
+const acknowledgeParentSosNotification = async (notificationId) => {
+  const token = localStorage.getItem("authToken");
+  if (!token) return;
+
+  setAcknowledgingParentNotification(notificationId);
+
+  try {
+    const response = await fetch(
+      `/api/alerts/notifications/${notificationId}/acknowledge/`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Token ${token}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(
+        data.error || data.detail || "Unable to acknowledge alert."
+      );
+    }
+
+    setParentSosNotifications((previous) =>
+      previous.map((item) =>
+        item.id === notificationId
+          ? { ...item, is_read: true, acknowledged: true }
+          : item
+      )
+    );
+  } catch (err) {
+    setSosMessage(err.message || "Unable to acknowledge parent SOS.");
+  } finally {
+    setAcknowledgingParentNotification(null);
+  }
+};
+
   useEffect(() => {
   if (!isApprovedVolunteer) {
     setActiveEmergencies([]);
@@ -218,6 +493,58 @@ const simulateSensor = async (scenario) => {
   const interval = setInterval(fetchActiveEmergencies, 5000);
   return () => clearInterval(interval);
   }, [isApprovedVolunteer]);
+
+  // Restore and synchronize the logged-in user's SOS from the backend.
+  // This prevents the UI from showing "Activate SOS" when an alert is
+  // already active, including after a page refresh or another device action.
+  useEffect(() => {
+    if (currentUser?.role !== "user") {
+      setSosActive(false);
+      setEmergencyId(null);
+      setSosStateLoading(false);
+      return;
+    }
+
+    const token = localStorage.getItem("authToken");
+    if (!token) {
+      setSosStateLoading(false);
+      return;
+    }
+
+    let active = true;
+    const syncMySOS = async () => {
+      try {
+        const response = await fetch("/api/alerts/my-sos/", {
+          cache: "no-store",
+          headers: { Authorization: `Token ${token}` },
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(data.error || data.detail || "Unable to check SOS status.");
+        }
+        if (!active) return;
+
+        const isActive = Boolean(data.active && data.emergency_id);
+        setSosActive(isActive);
+        setEmergencyId(isActive ? data.emergency_id : null);
+        setSosStateLoading(false);
+      } catch (err) {
+        if (active) {
+          console.error("Could not synchronize user SOS status:", err.message);
+          setSosStateLoading(false);
+        }
+      }
+    };
+
+    setSosStateLoading(true);
+    void syncMySOS();
+    const interval = setInterval(syncMySOS, 5000);
+
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [currentUser?.role, currentUser?.username]);
 
   const handleSOS = async () => {
     if (sosLoading || sosActive) return;
@@ -520,6 +847,52 @@ const handleLogout = () => {
         </header>
 
         {error && <div className="connection-banner"><span>!</span><div><strong>Sensor connection issue</strong><p>{error}. The dashboard will retry automatically.</p></div></div>}
+        {parentSosNotifications.slice(0, 4).map((item) => (
+  <article
+    className="child-parent-sos-notice"
+    key={item.id}
+    role="status"
+  >
+    <div className="child-parent-sos-notice-icon">!</div>
+
+    <div className="child-parent-sos-notice-content">
+      <strong>Parent SOS alert</strong>
+      <p>{item.message}</p>
+
+      <small>
+        {item.created_at
+          ? new Date(item.created_at).toLocaleString()
+          : "Recent alert"}
+        {" · "}Emergency #{item.emergency_id}
+      </small>
+
+      {item.latitude != null && item.longitude != null && (
+        <a
+          href={`https://www.google.com/maps?q=${item.latitude},${item.longitude}`}
+          target="_blank"
+          rel="noreferrer"
+        >
+          View parent's reported location on Maps ↗
+        </a>
+      )}
+    </div>
+
+    <button
+      type="button"
+      onClick={() => acknowledgeParentSosNotification(item.id)}
+      disabled={
+        acknowledgingParentNotification === item.id ||
+        item.acknowledged
+      }
+    >
+      {item.acknowledged
+        ? "Acknowledged"
+        : acknowledgingParentNotification === item.id
+          ? "Saving…"
+          : "Acknowledge"}
+    </button>
+  </article>
+))}
 
         <section className="metric-grid" aria-label="Safety metrics">
           <MetricCard tone="coral" icon="♨" label="Temperature" value={loading ? "--" : "28.5 °C"} status="Demo value" caption="Environmental reading" />
@@ -609,12 +982,15 @@ const handleLogout = () => {
     onClick={handleSOS}
     disabled={
       sosLoading ||
+      sosStateLoading ||
       sosActive ||
       currentUser.role !== "user"
     }
   >
     <span className="sos-symbol">♧</span>
-    {sosLoading
+    {sosStateLoading
+      ? "CHECKING SOS STATUS…"
+      : sosLoading
       ? "SENDING ALERT…"
       : sosActive
       ? "SOS ALERT SENT"
@@ -716,9 +1092,71 @@ const handleLogout = () => {
 </article>
 
           <article className="panel location-panel" id="location">
-            <div className="panel-heading"><div className="heading-icon blue-icon">⌖</div><div><h2>Live Location</h2><p>Location preview</p></div><span className="status-tag tag-demo">SIMULATED</span></div>
-            <div className="map-preview" role="img" aria-label="Illustrative map preview; no live GPS coordinates connected"><div className="map-road road-a" /><div className="map-road road-b" /><div className="map-road road-c" /><div className="map-park park-a" /><div className="map-park park-b" /><div className="map-pin">●</div><span className="map-label label-a">PARK</span><span className="map-label label-b">MAIN ROAD</span><div className="map-overlay-note">SIMULATED GPS</div></div>
-            <div className="location-details"><span>GPS status</span><strong>{autoSimulation ? "Simulating movement" : "Simulation ready"}</strong></div><div className="location-details"><span>Latitude</span><strong>{simulatedLocation.latitude}</strong></div><div className="location-details"><span>Longitude</span><strong>{simulatedLocation.longitude}</strong></div><p className="fine-print">Demo coordinates only; this is not live GPS.</p>
+            <div className="panel-heading"><div className="heading-icon blue-icon">⌖</div><div><h2>Live Location</h2><p>Browser GPS shared with your linked parent and assigned volunteer during an active emergency.</p></div><span className={`status-tag ${gpsStatus.includes("active") ? "tag-safe" : "tag-demo"}`}>{gpsStatus.includes("active") ? "LIVE GPS" : "GPS STATUS"}</span></div>
+            <div className="map-preview" role="img" aria-label="Illustrative map preview"><div className="map-road road-a" /><div className="map-road road-b" /><div className="map-road road-c" /><div className="map-park park-a" /><div className="map-park park-b" /><div className="map-pin">●</div><span className="map-label label-a">BENGALURU</span><span className="map-label label-b">LIVE LOCATION</span><div className="map-overlay-note">{gpsStatus.includes("active") ? "GPS CONNECTED" : "LOCATION STATUS"}</div></div>
+            <div className="location-details"><span>GPS status</span><strong>{gpsStatus}</strong></div>
+            <div className="location-details"><span>Latitude</span><strong>{liveGps ? liveGps.latitude.toFixed(6) : "Waiting for permission"}</strong></div>
+            <div className="location-details"><span>Longitude</span><strong>{liveGps ? liveGps.longitude.toFixed(6) : "Waiting for permission"}</strong></div>
+            {liveGps && <div className="location-details"><span>GPS accuracy</span><strong>±{Math.round(liveGps.accuracy_m)} m</strong></div>}
+            <p className="fine-print">Browser permission is required. Location sharing runs while this dashboard is open; it may stop when the browser is closed. Only Bengaluru-area updates are accepted by the backend.</p>
+            <div className="related-location-section">
+  <div className="related-location-heading">
+    <strong>Linked parent & assigned volunteer</strong>
+    <span>Refreshes every 5 seconds</span>
+  </div>
+
+  {relatedLocations.filter((item) => item.relation !== "self").length === 0 ? (
+    <p className="related-location-empty">
+      No linked parent or assigned volunteer location is available yet.
+    </p>
+  ) : (
+    <div className="related-location-grid">
+      {relatedLocations
+        .filter((item) => item.relation !== "self")
+        .map((item) => (
+          <article
+            className="related-location-card"
+            key={`${item.user_id}-${item.relation}`}
+          >
+            <div>
+              <strong>{item.full_name || item.username}</strong>
+              <span>
+                {item.relation === "linked_parent"
+                  ? "Linked parent"
+                  : "Assigned volunteer"}
+              </span>
+            </div>
+
+            <small>
+              {item.is_simulated ? "DEMO LOCATION" : "GPS LOCATION"}
+            </small>
+
+            <p>
+              {Number(item.latitude).toFixed(6)},{" "}
+              {Number(item.longitude).toFixed(6)}
+            </p>
+
+            <a
+              href={
+                item.maps_url ||
+                `https://www.google.com/maps?q=${item.latitude},${item.longitude}`
+              }
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open Maps ↗
+            </a>
+
+            <time>
+              {item.updated_at
+                ? `Updated ${new Date(item.updated_at).toLocaleTimeString()}`
+                : "Waiting for update"}
+            </time>
+          </article>
+        ))}
+    </div>
+  )}
+</div>
           </article>
         </section>
 
