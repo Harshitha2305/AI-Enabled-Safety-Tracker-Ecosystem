@@ -17,6 +17,8 @@ from .views import (
     AssignedEmergencyLiveLocationView,
     ParentSOSStatusView,
     MySOSStatusView,
+    SafeguardDeviceRaiseSOSView,
+    SafeguardDeviceStateView,
 )
 
 urlpatterns = [
@@ -54,4 +56,14 @@ urlpatterns = [
     name="parent-sos-status",
 ),
     path("my-sos/", MySOSStatusView.as_view(), name="my-sos-status"),
+    path(
+    "device/raise/",
+    SafeguardDeviceRaiseSOSView.as_view(),
+    name="device-raise-sos",
+),
+path(
+    "device/state/",
+    SafeguardDeviceStateView.as_view(),
+    name="device-sos-state",
+),
 ]

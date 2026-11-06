@@ -11,6 +11,8 @@ from rest_framework import status
 from .models import Emergency, EmergencyNotification, UserLocation
 from accounts.permissions import IsApprovedVolunteer
 from accounts.models import ParentChildLink, EmergencyContact
+import secrets
+from django.conf import settings
 
 
 def build_sms_simulation(user, emergency):
@@ -284,35 +286,6 @@ class RaiseEmergencyView(APIView):
                         "status": "simulated_not_sent",
                         "status_display": "SIMULATED - NOT SENT",
                     })
-
-            # Print the SMS simulation in the Django terminal.
-            print("\n" + "=" * 60, flush=True)
-            print("       SAFEGUARD - SIMULATED SMS TERMINAL", flush=True)
-            print("=" * 60, flush=True)
-            print(f"Emergency ID: {emergency.id}", flush=True)
-            print(f"Raised by: {display_name}", flush=True)
-            print(f"Recipients: {len(sms_previews)}", flush=True)
-            print("-" * 60, flush=True)
-
-            if sms_previews:
-                for index, sms in enumerate(sms_previews, start=1):
-                    print(f"CONTACT #{index}", flush=True)
-                    print(f"Name   : {sms['recipient_name']}", flush=True)
-                    print(f"Phone  : {sms['phone']}", flush=True)
-                    print(f"Status : {sms['status_display']}", flush=True)
-                    print("-" * 60, flush=True)
-                    print("MESSAGE:", flush=True)
-                    print(sms["message"], flush=True)
-                    print("-" * 60, flush=True)
-            else:
-                print(
-                    "No emergency contacts with phone numbers found.",
-                    flush=True,
-                )
-
-            print("SIMULATION ONLY - NO REAL SMS SENT", flush=True)
-            print("=" * 60 + "\n", flush=True)
-
         return Response(
             {
                 "message": "SOS alert created successfully.",
@@ -787,12 +760,6 @@ class CancelEmergencyView(APIView):
                 )
             )
 
-        print(
-            f"[SAFEGUARD] Emergency #{emergency.id} cancelled "
-            f"by {request.user.username}.",
-            flush=True,
-        )
-
         return Response(
             {
                 "message": "SOS cancelled successfully.",
@@ -973,15 +940,6 @@ class VolunteerSOSView(APIView):
                 )
                 for recipient in recipients
             ])
-
-        print("\n" + "=" * 55, flush=True)
-        print("SAFEGUARD — VOLUNTEER SOS (SIMULATION)", flush=True)
-        print(f"Volunteer: {display_name}", flush=True)
-        print(f"Emergency ID: {emergency.id}", flush=True)
-        print(f"Notified other approved volunteers: {len(recipients)}", flush=True)
-        print(f"Simulated coordinates: {latitude}, {longitude}", flush=True)
-        print("No real GPS or SMS used.", flush=True)
-        print("=" * 55 + "\n", flush=True)
 
         return Response(
             {
@@ -1340,3 +1298,167 @@ class MySOSStatusView(APIView):
             "emergency_id": emergency.id,
             "status": emergency.status,
         }, status=status.HTTP_200_OK)
+
+class SafeguardDeviceRaiseSOSView(APIView):
+    """
+    Protected ESP32 endpoint.
+    Raises SOS for the configured device owner.
+    """
+
+    permission_classes = []
+    authentication_classes = []
+
+    def post(self, request):
+        supplied_key = request.headers.get("X-Device-Key", "")
+        configured_key = getattr(settings, "SAFEGUARD_DEVICE_KEY", "")
+
+        if not configured_key or not secrets.compare_digest(
+            supplied_key, configured_key
+        ):
+            return Response(
+                {"error": "Invalid device authentication."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        username = getattr(
+            settings, "SAFEGUARD_DEVICE_USERNAME", "testuser01"
+        )
+
+        try:
+            owner = User.objects.select_related("profile").get(
+                username=username
+            )
+        except User.DoesNotExist:
+            return Response(
+                {"error": "Configured device owner does not exist."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        profile = getattr(owner, "profile", None)
+
+        if profile is None or profile.role != "user":
+            return Response(
+                {"error": "Device owner must be a registered user account."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            emergency = (
+                Emergency.objects.select_for_update()
+                .filter(
+                    user=owner,
+                    status__in=["active", "assigned", "responding"],
+                )
+                .order_by("-created_at")
+                .first()
+            )
+
+            if emergency:
+                emergency.description = (
+                    "PHYSICAL DEVICE SOS: SOS button pressed on "
+                    "SAFEGUARD ESP32 device."
+                )
+                emergency.save(
+                    update_fields=["description", "updated_at"]
+                )
+                created = False
+
+            else:
+                emergency = Emergency.objects.create(
+                    user=owner,
+                    description=(
+                        "PHYSICAL DEVICE SOS: SOS button pressed on "
+                        "SAFEGUARD ESP32 device."
+                    ),
+                )
+                created = True
+
+                recipient_ids = set(
+                    ParentChildLink.objects.filter(
+                        child=owner,
+                        parent__isnull=False,
+                    ).values_list("parent_id", flat=True)
+                )
+
+                volunteer_ids = User.objects.filter(
+                    profile__role="volunteer",
+                    profile__volunteer_status="approved",
+                ).values_list("id", flat=True)
+
+                recipient_ids.update(volunteer_ids)
+                recipient_ids.discard(owner.id)
+
+                recipients = User.objects.filter(id__in=recipient_ids)
+
+                display_name = profile.full_name or owner.username
+
+                EmergencyNotification.objects.bulk_create([
+                    EmergencyNotification(
+                        recipient=recipient,
+                        emergency=emergency,
+                        message=(
+                            f"{display_name} has raised a physical "
+                            f"device SOS alert. Emergency #{emergency.id}."
+                        ),
+                    )
+                    for recipient in recipients
+                ])
+
+        return Response(
+            {
+                "message": "Physical device SOS received.",
+                "emergency_id": emergency.id,
+                "status": emergency.status,
+                "existing_alert": not created,
+            },
+            status=(
+                status.HTTP_201_CREATED
+                if created
+                else status.HTTP_200_OK
+            ),
+        )
+
+
+class SafeguardDeviceStateView(APIView):
+    """Returns the configured device owner's current SOS state."""
+
+    permission_classes = []
+    authentication_classes = []
+
+    def get(self, request):
+        supplied_key = request.headers.get("X-Device-Key", "")
+        configured_key = getattr(settings, "SAFEGUARD_DEVICE_KEY", "")
+
+        if not configured_key or not secrets.compare_digest(
+            supplied_key, configured_key
+        ):
+            return Response(
+                {"error": "Invalid device authentication."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        username = getattr(
+            settings, "SAFEGUARD_DEVICE_USERNAME", "testuser01"
+        )
+
+        emergency = (
+            Emergency.objects.filter(
+                user__username=username,
+                status__in=["active", "assigned", "responding"],
+            )
+            .order_by("-created_at")
+            .first()
+        )
+
+        if emergency is None:
+            return Response({
+                "active": False,
+                "emergency_id": None,
+                "status": "inactive",
+            })
+
+        return Response({
+            "active": True,
+            "emergency_id": emergency.id,
+            "status": emergency.status,
+        })

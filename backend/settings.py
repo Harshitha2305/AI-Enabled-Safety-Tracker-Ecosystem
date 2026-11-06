@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
 from pathlib import Path
+import os
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -20,12 +21,19 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-p#)g(le67n!dhp9cgd6(uzq1=fdw6!m$ls+e(6-b5sd@l!mx+1'
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY")
+
+if not SECRET_KEY:
+    raise RuntimeError("DJANGO_SECRET_KEY environment variable is not set")
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [
+    "localhost",
+    "127.0.0.1",
+    "10.152.10.201"
+]
 
 
 # Application definition
@@ -138,3 +146,7 @@ REST_FRAMEWORK = {
         "rest_framework.authentication.TokenAuthentication",
     ],
 }
+
+SAFEGUARD_DEVICE_USERNAME = "testuser01"
+SAFEGUARD_DEVICE_ID = "SAFEGUARD_01"
+SAFEGUARD_DEVICE_KEY = os.environ.get("SAFEGUARD_DEVICE_KEY", "UJdpMuzNsVH2VpC6xkw07z3Xr-5SwvqlS2WKBf1Gkis")

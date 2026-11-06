@@ -1,11 +1,12 @@
-
 import math
 
 from rest_framework import generics
 from rest_framework.response import Response
 
-from .models import SensorData
-from .serializers import SensorDataSerializer
+from .models import SensorData, SoundData
+from .serializers import SensorDataSerializer,SoundDataSerializer
+from rest_framework.views import APIView
+from rest_framework import status
 
 
 FALL_THRESHOLD = 18.0
@@ -52,3 +53,30 @@ class SensorDataListView(generics.ListAPIView):
             item.update(get_sensor_status(item))
 
         return response
+    
+class SoundDataCreateView(APIView):
+    def post(self, request):
+        serializer = SoundDataSerializer(data=request.data)
+
+        if serializer.is_valid():
+            serializer.save()
+            return Response(
+                serializer.data,
+                status=status.HTTP_201_CREATED
+            )
+
+        return Response(
+            serializer.errors,
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+
+class LatestSoundDataView(APIView):
+    def get(self, request):
+        sound_data = SoundData.objects.order_by('-created_at').first()
+
+        if sound_data is None:
+            return Response({"message": "No sound data available"})
+
+        serializer = SoundDataSerializer(sound_data)
+        return Response(serializer.data)

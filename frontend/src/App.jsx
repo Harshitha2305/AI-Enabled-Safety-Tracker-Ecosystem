@@ -11,6 +11,10 @@ function App() {
   const [sensorData, setSensorData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  // MAX9814 microphone data (kept separate from motion sensor data)
+  const [soundData, setSoundData] = useState(null);
+  const [soundLoading, setSoundLoading] = useState(true);
+  const [soundError, setSoundError] = useState("");
   const [sosActive, setSosActive] = useState(false);
   const [fallDetected, setFallDetected] = useState(false);
   const [simulationMessage, setSimulationMessage] = useState("");
@@ -29,6 +33,12 @@ const [simulationScenario, setSimulationScenario] = useState("normal");
   const simulationTick = useRef(0);
   const simulatedLocationRef = useRef(simulatedLocation);
   const [sosLoading, setSosLoading] = useState(false);
+  const [voiceListening, setVoiceListening] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState("Voice detection is off.");
+  const recognitionRef = useRef(null);
+  const voiceListeningRef = useRef(false);
+  const voiceSosTriggeredRef = useRef(false);
+  const handleSOSRef = useRef(null);
   const [sosStateLoading, setSosStateLoading] = useState(false);
   const [sosMessage, setSosMessage] = useState("");
   const [gpsStatus, setGpsStatus] = useState("Waiting for GPS permission");
@@ -67,6 +77,24 @@ const [simulationScenario, setSimulationScenario] = useState("normal");
       setError("Unable to connect to sensor API");
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Fetch the latest MAX9814 reading from Django.
+  const fetchSoundData = async () => {
+    try {
+      const response = await fetch("/api/sensor-data/sound/latest/");
+      if (!response.ok) {
+        throw new Error(`Sound API returned HTTP ${response.status}`);
+      }
+      const data = await response.json();
+      setSoundData(data);
+      setSoundError("");
+    } catch (err) {
+      console.error("Sound API error:", err);
+      setSoundError("Unable to load sound data");
+    } finally {
+      setSoundLoading(false);
     }
   };
 
@@ -211,6 +239,13 @@ const simulateSensor = async (scenario) => {
   useEffect(() => {
     fetchSensorData();
     const interval = setInterval(fetchSensorData, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Refresh MAX9814 readings independently every five seconds.
+  useEffect(() => {
+    fetchSoundData();
+    const interval = setInterval(fetchSoundData, 5000);
     return () => clearInterval(interval);
   }, []);
 
@@ -546,8 +581,8 @@ const acknowledgeParentSosNotification = async (notificationId) => {
     };
   }, [currentUser?.role, currentUser?.username]);
 
-  const handleSOS = async () => {
-    if (sosLoading || sosActive) return;
+  const handleSOS = async (voiceKeyword = null) => {
+    if (sosLoading || sosActive || (voiceKeyword && voiceSosTriggeredRef.current)) return;
     if (currentUser?.role !== "user") {
       setSosMessage("SOS alerts are available to registered user accounts.");
       return;
@@ -558,6 +593,7 @@ const acknowledgeParentSosNotification = async (notificationId) => {
       setSosMessage("Please log in before raising an SOS alert.");
       return;
     }
+    if (voiceKeyword) voiceSosTriggeredRef.current = true;
     setSosLoading(true);
     setSosMessage("");
     try {
@@ -565,7 +601,9 @@ const acknowledgeParentSosNotification = async (notificationId) => {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Token ${token}` },
         body: JSON.stringify({
-          description: "SOS raised from the SAFEGUARD dashboard.",
+          description: voiceKeyword
+            ? `VOICE ACTIVATED SOS: recognized keyword "${voiceKeyword}".`
+            : "SOS raised from the SAFEGUARD dashboard.",
           latitude: Number(simulatedLocationRef.current.latitude),
           longitude: Number(simulatedLocationRef.current.longitude),
         }),
@@ -574,14 +612,27 @@ const acknowledgeParentSosNotification = async (notificationId) => {
       if (!response.ok) throw new Error(data.error || data.detail || "Unable to raise SOS.");
       setSosActive(true);
       setEmergencyId(data.emergency_id);
-        setSosMessage(`SOS sent successfully. Emergency ID: ${data.emergency_id}`);
+        setSosMessage(
+        voiceKeyword
+          ? `Voice keyword "${voiceKeyword}" detected. SOS activated. Emergency ID: ${data.emergency_id}`
+          : `SOS sent successfully. Emergency ID: ${data.emergency_id}`
+      );
+      if (voiceKeyword) {
+        setVoiceStatus(`Detected "${voiceKeyword}" — SOS activated.`);
+        setVoiceListening(false);
+      }
     } catch (err) {
+      if (voiceKeyword) {
+        voiceSosTriggeredRef.current = false;
+        setVoiceStatus(`SOS request failed: ${err.message || "Please try again."}`);
+      }
       setSosMessage(err.message || "Unable to connect to the SOS API.");
     } finally {
       setSosLoading(false);
     }
   };
-  
+  // Make the SOS function accessible to voice recognition.
+handleSOSRef.current = handleSOS;
 const handleCancelSOS = async () => {
   if (sosLoading) return;
 
@@ -637,6 +688,7 @@ const handleCancelSOS = async () => {
     );
 
     autoSosTriggered.current = false;
+    voiceSosTriggeredRef.current = false;
 
     // Show success popup.
     window.alert(
@@ -728,6 +780,111 @@ const handleLogout = () => {
     block: "start",
   });
 };
+
+  // Browser-based voice SOS. This uses the browser microphone, not the MAX9814.
+  useEffect(() => {
+    voiceListeningRef.current = voiceListening;
+
+    if (!voiceListening) {
+      if (recognitionRef.current) {
+        recognitionRef.current.onend = null;
+        recognitionRef.current.stop();
+        recognitionRef.current = null;
+      }
+      return;
+    }
+
+    if (currentUser?.role !== "user") {
+      setVoiceStatus("Voice SOS is available to registered user accounts.");
+      setVoiceListening(false);
+      return;
+    }
+
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      setVoiceStatus("Speech recognition is not supported in this browser.");
+      setVoiceListening(false);
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognitionRef.current = recognition;
+    recognition.lang = "en-US";
+    recognition.continuous = true;
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    recognition.onstart = () => {
+      setVoiceStatus("Listening for HELP, SAVE ME, or EMERGENCY…");
+    };
+
+    recognition.onresult = (event) => {
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        if (!event.results[i].isFinal) continue;
+
+        const transcript = event.results[i][0].transcript
+          .toUpperCase()
+          .replace(/[^A-Z\s]/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+
+        const keyword = ["HELP", "SAVE ME", "EMERGENCY"].find((phrase) =>
+          new RegExp(`(^|\\s)${phrase.replace(" ", "\\s+")}(?=$|\\s)`).test(transcript)
+        );
+
+        if (keyword) {
+          setVoiceStatus(`Recognized "${keyword}". Activating SOS…`);
+          if (!voiceSosTriggeredRef.current) {
+            void handleSOSRef.current?.(keyword);
+          }
+          return;
+        }
+
+        setVoiceStatus(`Heard: "${transcript}". Waiting for an emergency keyword…`);
+      }
+    };
+
+    recognition.onerror = (event) => {
+      if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+        setVoiceStatus("Microphone permission denied. Allow microphone access in Edge.");
+        setVoiceListening(false);
+      } else if (event.error !== "no-speech" && event.error !== "aborted") {
+        setVoiceStatus(`Voice recognition error: ${event.error}`);
+      }
+    };
+
+    recognition.onend = () => {
+      if (voiceListeningRef.current && !voiceSosTriggeredRef.current) {
+        try {
+          recognition.start();
+        } catch {
+          // The browser may still be completing its previous recognition session.
+        }
+      }
+    };
+
+    try {
+      recognition.start();
+    } catch (err) {
+      setVoiceStatus(`Could not start voice recognition: ${err.message}`);
+      setVoiceListening(false);
+    }
+
+    return () => {
+      voiceListeningRef.current = false;
+      recognition.onend = null;
+      try {
+        recognition.stop();
+      } catch {
+        // Ignore an already-stopped recognition session.
+      }
+      if (recognitionRef.current === recognition) {
+        recognitionRef.current = null;
+      }
+    };
+  }, [voiceListening, currentUser?.role]);
 
   // All hooks must remain above conditional returns.
   useEffect(() => {
@@ -896,7 +1053,26 @@ const handleLogout = () => {
 
         <section className="metric-grid" aria-label="Safety metrics">
           <MetricCard tone="coral" icon="♨" label="Temperature" value={loading ? "--" : "28.5 °C"} status="Demo value" caption="Environmental reading" />
-          <MetricCard tone="blue" icon="◖))" label="Sound Level" value={loading ? "--" : "52 dB"} status="Demo value" caption="Ambient sound level" />
+          <MetricCard
+            tone="blue"
+            icon="◖))"
+            label="Sound Level"
+            value={
+              soundLoading
+                ? "--"
+                : soundData
+                  ? soundData.sound_peak_to_peak
+                  : "--"
+            }
+            status={
+              soundError
+                ? "Offline"
+                : soundData
+                  ? "Live"
+                  : "Waiting"
+            }
+            caption="Relative microphone level"
+          />
           <MetricCard tone="violet" icon="⌁" label="Vibration" value={vibration} status={sensor ? "Sensor data" : "Waiting"} caption="Acceleration magnitude" />
           <MetricCard tone={safety.status === "DANGER" ? "coral" : "mint"} icon="✓" label="Safety Status" value={safety.status} status={safety.status === "SAFE" ? "Within range" : "Check reading"} caption={safety.message} />
         </section>
@@ -996,6 +1172,45 @@ const handleLogout = () => {
       ? "SOS ALERT SENT"
       : "ACTIVATE EMERGENCY SOS"}
   </button>
+
+  <div style={{ marginTop: "16px", padding: "14px", border: "1px solid #dbeafe", borderRadius: "12px", background: "#f8fbff" }}>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+      <div>
+        <strong>Voice-Activated SOS</strong>
+        <p style={{ margin: "5px 0 0", fontSize: "13px", color: "#64748b" }}>
+          Say HELP, SAVE ME, or EMERGENCY to trigger SOS.
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={() => {
+          if (voiceListening) {
+            setVoiceListening(false);
+            setVoiceStatus("Voice detection stopped.");
+          } else {
+            voiceSosTriggeredRef.current = false;
+            setVoiceListening(true);
+          }
+        }}
+        disabled={currentUser.role !== "user" || sosActive}
+        style={{
+          padding: "10px 14px",
+          borderRadius: "9px",
+          border: "1px solid",
+          borderColor: voiceListening ? "#fecaca" : "#bfdbfe",
+          background: voiceListening ? "#fff1f2" : "#eff6ff",
+          color: voiceListening ? "#be123c" : "green",
+          fontWeight: 700,
+          cursor: currentUser.role !== "user" || sosActive ? "not-allowed" : "pointer",
+        }}
+      >
+        {voiceListening ? "STOP VOICE DETECTION" : "START VOICE DETECTION"}
+      </button>
+    </div>
+    <p className="inline-feedback" role="status" style={{ marginBottom: 0 }}>
+      {voiceStatus}
+    </p>
+  </div>
 
   <div className={`sos-status-line ${sosActive ? "sent" : ""}`}>
     <span className="status-bullet" />
